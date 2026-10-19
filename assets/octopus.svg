@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="400" height="400" role="img" aria-label="Cypherpunk octopus">
+  <rect width="400" height="400" fill="#0a0e14"/>
+  <g fill="none" stroke="#39ff14" stroke-width="7" stroke-linecap="round">
+    <path d="M150 215 C100 250 70 300 90 345 C98 362 118 360 114 342"/>
+    <path d="M170 225 C140 275 135 320 150 365"/>
+    <path d="M200 230 C200 280 195 325 205 372"/>
+    <path d="M230 225 C260 275 265 320 250 365"/>
+    <path d="M250 215 C300 250 330 300 310 345 C302 362 282 360 286 342"/>
+    <path d="M135 195 C75 205 40 235 45 275"/>
+    <path d="M265 195 C325 205 360 235 355 275"/>
+  </g>
+  <path d="M200 40 C120 40 105 110 112 170 C118 215 160 235 200 235 C240 235 282 215 288 170 C295 110 280 40 200 40Z" fill="#0f2a14" stroke="#39ff14" stroke-width="7"/>
+  <path d="M200 40 C150 60 128 95 124 135 L276 135 C272 95 250 60 200 40Z" fill="#05140a" stroke="#39ff14" stroke-width="5"/>
+  <rect x="128" y="138" width="144" height="30" rx="10" fill="#39ff14"/>
+  <rect x="150" y="146" width="100" height="14" rx="4" fill="#0a0e14"/>
+  <rect x="158" y="150" width="84" height="6" fill="#00e5ff"/>
+  <g fill="#39ff14" font-family="monospace" font-size="16">
+    <text x="20" y="30">01101111 0x4f</text>
+    <text x="280" y="388">&gt; octopus_</text>
+  </g>
+</svg>
