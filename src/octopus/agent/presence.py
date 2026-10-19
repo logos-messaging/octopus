@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from ..proto import PRESENCE_TOPIC, Presence
 from ..transport import Transport
 
-DEFAULT_INTERVAL_S = 30.0
+DEFAULT_INTERVAL_S = 10.0
 
 
 @dataclass(frozen=True)
