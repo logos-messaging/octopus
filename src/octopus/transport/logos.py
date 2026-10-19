@@ -92,32 +92,32 @@ class LogosTransport(Transport):
         config: LogosConfig | dict,
     ) -> None:
         self._config = config.to_node_config() if isinstance(config, LogosConfig) else config
-        self._handlers: dict[str, Handler] = {}
-        self._status_cbs: list[StatusCallback] = []
+        self._topic_handlers: dict[str, Handler] = {}
+        self._status_callbacks: list[StatusCallback] = []
         self._node = None
         self._running = False
         # Bumped per node so events from a destroyed node are ignored.
-        self._gen = 0
-        self._queue: queue.Queue = queue.Queue()
+        self._node_generation = 0
+        self._event_queue: queue.Queue = queue.Queue()
         # Runs the subscribe() handlers, so they may block without stalling the
         # library's event thread. Kept so stop() can join it.
         self._handler_thread: threading.Thread | None = None
-        self._lock = threading.RLock()
-        self._status_cond = threading.Condition()
+        self._lifecycle_lock = threading.RLock()
+        self._status_changed = threading.Condition()
         self._status = DISCONNECTED
-        self._seen: OrderedDict[str, None] = OrderedDict()
+        self._delivered_hashes: OrderedDict[str, None] = OrderedDict()
         self.dropped_events = 0
 
     # lifecycle
 
     def start(self) -> None:
-        with self._lock:
+        with self._lifecycle_lock:
             if self._running:
                 return
             self._running = True
-            self._queue = queue.Queue()
+            self._event_queue = queue.Queue()
             self._handler_thread = threading.Thread(
-                target=self._dispatch, name="octopus-ld", daemon=True
+                target=self._run_handlers, name="octopus-ld", daemon=True
             )
             self._handler_thread.start()
             try:
@@ -128,8 +128,8 @@ class LogosTransport(Transport):
             self._refresh_status()
 
     def stop(self) -> None:
-        # Handlers take self._lock, so it must not be held while joining their thread.
-        with self._lock:
+        # Handlers take self._lifecycle_lock, so it must not be held while joining their thread.
+        with self._lifecycle_lock:
             if not self._running:
                 return
             node, handler_thread = self._detach()
@@ -145,7 +145,7 @@ class LogosTransport(Transport):
         On failure the transport stays running with no node, so a later
         restart() can try again.
         """
-        with self._lock:
+        with self._lifecycle_lock:
             if not self._running:
                 raise RuntimeError("could not restart: LogosTransport is not started")
             old, self._node = self._node, None
@@ -173,10 +173,10 @@ class LogosTransport(Transport):
     # Transport API
 
     def subscribe(self, topic: str, handler: Handler) -> None:
-        with self._lock:
+        with self._lifecycle_lock:
             node = self._require_node()
-            previous = self._handlers.get(topic)
-            self._handlers[topic] = handler
+            previous = self._topic_handlers.get(topic)
+            self._topic_handlers[topic] = handler
             try:
                 _unwrap(
                     node.subscribe_content_topic(topic),
@@ -184,19 +184,19 @@ class LogosTransport(Transport):
                 )
             except LogosError:
                 if previous is None:
-                    del self._handlers[topic]
+                    del self._topic_handlers[topic]
                 else:
-                    self._handlers[topic] = previous
+                    self._topic_handlers[topic] = previous
                 raise
 
     def unsubscribe(self, topic: str) -> None:
-        with self._lock:
+        with self._lifecycle_lock:
             node = self._require_node()
             _unwrap(
                 node.unsubscribe_content_topic(topic),
                 f"could not unsubscribe from topic: {topic}",
             )
-            self._handlers.pop(topic, None)
+            self._topic_handlers.pop(topic, None)
 
     def publish(self, topic: str, payload: bytes) -> None:
         message = {
@@ -205,7 +205,7 @@ class LogosTransport(Transport):
             "ephemeral": False,
         }
         # Under the lock so a publish during restart() waits for the new node.
-        with self._lock:
+        with self._lifecycle_lock:
             _unwrap(
                 self._require_node().send_message(message),
                 f"could not publish to topic: {topic}",
@@ -213,7 +213,7 @@ class LogosTransport(Transport):
 
     def multiaddrs(self) -> list[str]:
         """Addresses other nodes can use as `entry_nodes` to reach this one."""
-        with self._lock:
+        with self._lifecycle_lock:
             raw = _unwrap(
                 self._require_node().get_node_info("MyMultiaddresses"),
                 "could not get node multiaddresses",
@@ -224,20 +224,20 @@ class LogosTransport(Transport):
 
     @property
     def status(self) -> str:
-        with self._status_cond:
+        with self._status_changed:
             return self._status
 
     def on_status_change(self, cb: StatusCallback) -> None:
-        self._status_cbs.append(cb)
+        self._status_callbacks.append(cb)
 
     def wait_connected(self, timeout: float) -> bool:
         deadline = time.monotonic() + timeout
-        with self._status_cond:
+        with self._status_changed:
             while self._status == DISCONNECTED:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     return False
-                self._status_cond.wait(remaining)
+                self._status_changed.wait(remaining)
             return True
 
     # internals
@@ -250,11 +250,11 @@ class LogosTransport(Transport):
     def _detach(self):
         """Mark stopped and take ownership of the node and handler thread. Lock held."""
         self._running = False
-        self._gen += 1
+        self._node_generation += 1
         node, self._node = self._node, None
         handler_thread, self._handler_thread = self._handler_thread, None
         if handler_thread is not None:
-            self._queue.put(None)
+            self._event_queue.put(None)
         return node, handler_thread
 
     def _teardown(self) -> None:
@@ -264,16 +264,16 @@ class LogosTransport(Transport):
 
     def _create_node(self):
         ld = _load_bindings()
-        self._gen += 1
-        gen = self._gen
+        self._node_generation += 1
+        generation = self._node_generation
         node = _unwrap(
             ld.NodeWrapper.create_and_start(
-                self._config, event_cb=lambda ret, msg: self._on_event(gen, msg)
+                self._config, event_cb=lambda ret, msg: self._on_event(generation, msg)
             ),
             "could not start logos node",
         )
         try:
-            for topic in self._handlers:
+            for topic in self._topic_handlers:
                 _unwrap(
                     node.subscribe_content_topic(topic),
                     f"could not re-subscribe to topic: {topic}",
@@ -292,16 +292,16 @@ class LogosTransport(Transport):
             self._set_status(str(res.ok_value).strip('"'))
 
     def _set_status(self, status: str, notify: bool = True) -> None:
-        with self._status_cond:
+        with self._status_changed:
             changed = status != self._status
             self._status = status
-            self._status_cond.notify_all()
+            self._status_changed.notify_all()
         if changed and notify:
-            self._queue.put(("status", status))
+            self._event_queue.put(("status", status))
 
-    def _on_event(self, gen: int, msg: bytes) -> None:
+    def _on_event(self, generation: int, msg: bytes) -> None:
         # Library event thread: parse, filter, enqueue. Nothing else.
-        if gen != self._gen:
+        if generation != self._node_generation:
             return
         try:
             event = json.loads(msg)
@@ -310,14 +310,14 @@ class LogosTransport(Transport):
             self.dropped_events += 1
             return
         if kind == "message_received":
-            self._queue.put(("msg", event))
+            self._event_queue.put(("msg", event))
         elif kind == "node_health_change":
             status = event.get("status")
             if isinstance(status, str):
                 self._set_status(status)
 
-    def _dispatch(self) -> None:
-        q = self._queue
+    def _run_handlers(self) -> None:
+        q = self._event_queue
         while True:
             item = q.get()
             if item is None:
@@ -327,7 +327,7 @@ class LogosTransport(Transport):
                 if kind == "msg":
                     self._deliver(data)
                 else:
-                    for cb in list(self._status_cbs):
+                    for cb in list(self._status_callbacks):
                         cb(data)
             except Exception:
                 log.exception("could not dispatch logos event")
@@ -336,16 +336,16 @@ class LogosTransport(Transport):
         message = event.get("message") or {}
         topic = message.get("contentTopic")
         payload = message.get("payload")
-        handler = self._handlers.get(topic) if topic else None
+        handler = self._topic_handlers.get(topic) if topic else None
         if handler is None or payload is None:
             return
         mhash = event.get("messageHash")
-        if mhash and mhash in self._seen:
+        if mhash and mhash in self._delivered_hashes:
             return
         handler(topic, base64.b64decode(payload))
         # Only after the handler succeeded, so a failed message can be retried
         # when Store recovery delivers it again.
         if mhash:
-            self._seen[mhash] = None
-            if len(self._seen) > _DEDUP_SIZE:
-                self._seen.popitem(last=False)
+            self._delivered_hashes[mhash] = None
+            if len(self._delivered_hashes) > _DEDUP_SIZE:
+                self._delivered_hashes.popitem(last=False)

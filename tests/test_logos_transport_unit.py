@@ -230,7 +230,7 @@ def test_failed_subscribe_is_not_recorded(transport, monkeypatch):
     monkeypatch.setattr(node, "subscribe_content_topic", lambda t: Res(err="bad topic"))
     with pytest.raises(logos.LogosError, match="could not subscribe to topic: /bad"):
         transport.subscribe("/bad", lambda t, p: None)
-    assert "/bad" not in transport._handlers
+    assert "/bad" not in transport._topic_handlers
     transport.restart()  # replay must not trip over the failed topic
 
 
