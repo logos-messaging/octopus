@@ -8,7 +8,6 @@ Verified against `liblogosdelivery` (logos-delivery `v0.39.0-45`) with `tests/te
 in `config.py` (`cluster-id 2`, 8 shards, the fleet entry nodes), so the fleet provides discovery and bootstrap and
 Octopus traffic uses its own `/octopus/1/...` content topics. Coordinators are still needed for GitHub,
 scheduling and as dedicated entry nodes (they are appended to the fleet entry nodes).
-Top-level `clusterId` (as in the bindings README) is rejected by this library version.
 
 ## Coordinator (public IP)
 - `coordinator_config(public_ip, tcp_port=60000, entry_nodes=[other coordinators])`.
