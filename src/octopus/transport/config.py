@@ -3,9 +3,9 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping, Sequence
 
-# Octopus runs on its own cluster so it never mixes with other Logos networks.
-CLUSTER_ID = 198
-NUM_SHARDS = 1
+# Octopus joins the public Logos test network: its fleet gives us discovery and
+# bootstrap for free, and Octopus traffic stays on its own content topics.
+PRESET = "logos.test"
 DEFAULT_TCP_PORT = 60000
 
 ENTRY_NODES_ENV = "OCTOPUS_ENTRY_NODES"
@@ -15,16 +15,12 @@ NAT_ENV = "OCTOPUS_NAT"
 
 
 def _base(tcp_port: int, entry_nodes: Sequence[str], nat: str | None) -> dict:
-    overrides: dict = {
-        "cluster-id": CLUSTER_ID,
-        "num-shards-in-network": NUM_SHARDS,
-        "tcp-port": tcp_port,
-    }
+    overrides: dict = {"tcp-port": tcp_port}
     if entry_nodes:
         overrides["entry-node"] = list(entry_nodes)
     if nat:
         overrides["nat"] = nat
-    return {"mode": "Core", "messagingOverrides": overrides}
+    return {"mode": "Core", "preset": PRESET, "messagingOverrides": overrides}
 
 
 def coordinator_config(

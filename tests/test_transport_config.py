@@ -9,7 +9,7 @@ def test_coordinator_advertises_public_ip():
     assert cfg["mode"] == "Core"
     assert o["nat"] == "extip:203.0.113.7"
     assert o["entry-node"] == ["/ip4/1.1.1.1/tcp/60000/p2p/Qm"]
-    assert o["cluster-id"] == config.CLUSTER_ID
+    assert cfg["preset"] == "logos.test"
 
 
 def test_coordinator_requires_public_ip():

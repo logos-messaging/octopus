@@ -4,7 +4,10 @@ Verified against `liblogosdelivery` (logos-delivery `v0.39.0-45`) with `tests/te
 
 ## Config shape
 `octopus.transport.config` builds the JSON passed to `NodeWrapper.create_and_start`:
-`{"mode": "Core", "messagingOverrides": {...}}`. Octopus uses its own cluster (`cluster-id 198`, 1 shard).
+`{"mode": "Core", "preset": "logos.test", "messagingOverrides": {...}}`. Octopus joins the public Logos
+test network (preset `logos.test`: its cluster, shards and fleet entry nodes), so the fleet provides
+discovery and bootstrap; Octopus traffic uses its own `/octopus/1/...` content topics. Coordinators
+are still needed for GitHub, scheduling and as dedicated entry nodes.
 Top-level `clusterId` (as in the bindings README) is rejected by this library version.
 
 ## Coordinator (public IP)
