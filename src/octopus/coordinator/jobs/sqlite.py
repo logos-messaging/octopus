@@ -1,3 +1,9 @@
+"""SQLite implementation of JobStore.
+
+Purpose: persist jobs and their append-only event timeline so the history survives a
+coordinator restart; validates transitions and purges old finished jobs (retention).
+"""
+
 from __future__ import annotations
 
 import sqlite3

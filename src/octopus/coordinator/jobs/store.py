@@ -1,3 +1,9 @@
+"""The JobStore interface.
+
+Purpose: let the scheduler and `explain` depend on an abstract store (create,
+transition, query, timeline, purge), so the SQLite backend can be swapped or faked.
+"""
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod

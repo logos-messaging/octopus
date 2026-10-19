@@ -1,3 +1,7 @@
+"""Tests for the job lifecycle store: state machine, failure reasons, filters,
+persistence across restarts and retention.
+"""
+
 import pytest
 
 from octopus.coordinator.jobs import IllegalTransition, SqliteJobStore, State, UnknownJob

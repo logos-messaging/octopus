@@ -1,3 +1,9 @@
+"""Job states, legal transitions and the Job/Event records.
+
+Purpose: define, in one place, the lifecycle every job follows so illegal moves can
+be rejected and every part of the coordinator talks about states the same way.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
