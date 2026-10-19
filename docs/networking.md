@@ -4,10 +4,10 @@ Verified against `liblogosdelivery` (logos-delivery `v0.39.0-45`) with `tests/te
 
 ## Config shape
 `octopus.transport.config` builds the JSON passed to `NodeWrapper.create_and_start`:
-`{"mode": "Core", "messagingOverrides": {...}}`. No `preset` is used: the Logos test network values are hard-coded
-in `config.py` (`cluster-id 2`, 8 shards, the fleet entry nodes), so the fleet provides discovery and bootstrap and
-Octopus traffic uses its own `/octopus/1/...` content topics. Coordinators are still needed for GitHub,
-scheduling and as dedicated entry nodes (they are appended to the fleet entry nodes).
+`{"mode": "Core", "preset": "logos.test", "messagingOverrides": {...}}`. The `logos.test` preset supplies the
+cluster, shards and fleet entry nodes, so the fleet provides discovery and bootstrap and Octopus traffic uses
+its own `/octopus/1/...` content topics. Coordinators are still needed for GitHub and scheduling. An explicit
+`entry-node` list replaces the preset's, so only set it to point at specific coordinators.
 
 ## Coordinator (public IP)
 - `coordinator_config(public_ip, tcp_port=60000, entry_nodes=[other coordinators])`.
@@ -16,7 +16,7 @@ scheduling and as dedicated entry nodes (they are appended to the fleet entry no
 - The coordinator's multiaddr (`MyMultiaddresses` node info, `/ip4/<ip>/tcp/<port>/p2p/<peerId>`) is what runners use as entry node.
 
 ## Runner (laptop, behind NAT)
-- `runner_config(entry_nodes=[coordinator multiaddrs], nat=None|"any")`. It dials out, so a plain NAT works without port forwarding: the coordinator relays gossip to it.
+- `runner_config(entry_nodes=(), nat=None|"any")` (entry nodes optional). It dials out, so a plain NAT works without port forwarding: the coordinator relays gossip to it.
 - `nat="any"` additionally tries UPnP/NAT-PMP.
 - Mode is `Core`. `Edge` (client-only) would save resources but has not been evaluated.
 
