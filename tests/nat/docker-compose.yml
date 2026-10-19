@@ -1,0 +1,25 @@
+# Runners sit on separate internal networks and can only reach the coordinator,
+# so a message from runner A to runner B must be relayed by the coordinator.
+services:
+  coordinator:
+    build: {context: ../.., dockerfile: tests/nat/Dockerfile, args: {LIB: "${LIB:?set LIB}"}}
+    environment: {ROLE: coordinator, OCTOPUS_PUBLIC_IP: 10.10.0.2}
+    volumes: [shared:/shared]
+    networks: {pub: {ipv4_address: 10.10.0.2}, lan_a: {}, lan_b: {}}
+  runner_a:
+    build: {context: ../.., dockerfile: tests/nat/Dockerfile, args: {LIB: "${LIB:?set LIB}"}}
+    environment: {ROLE: sender, COORDINATOR_HOST: coordinator}
+    depends_on: [coordinator, runner_b]
+    volumes: [shared:/shared]
+    networks: [lan_a]
+  runner_b:
+    build: {context: ../.., dockerfile: tests/nat/Dockerfile, args: {LIB: "${LIB:?set LIB}"}}
+    environment: {ROLE: receiver, COORDINATOR_HOST: coordinator}
+    depends_on: [coordinator]
+    volumes: [shared:/shared]
+    networks: [lan_b]
+volumes: {shared: {}}
+networks:
+  pub: {ipam: {config: [{subnet: 10.10.0.0/24}]}}
+  lan_a: {internal: true}
+  lan_b: {internal: true}
