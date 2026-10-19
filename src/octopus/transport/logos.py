@@ -99,6 +99,8 @@ class LogosTransport(Transport):
         # Bumped per node so events from a destroyed node are ignored.
         self._gen = 0
         self._queue: queue.Queue = queue.Queue()
+        # Runs the subscribe() handlers, so they may block without stalling the
+        # library's event thread. Kept so stop() can join it.
         self._handler_thread: threading.Thread | None = None
         self._lock = threading.RLock()
         self._status_cond = threading.Condition()
