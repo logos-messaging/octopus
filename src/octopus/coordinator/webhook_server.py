@@ -1,0 +1,99 @@
+"""HTTP endpoint for GitHub webhooks, on the standard library's threading HTTP server.
+
+Plain HTTP: put it behind a TLS-terminating reverse proxy (see docs/github-app.md). It binds
+to localhost by default for that reason.
+"""
+
+from __future__ import annotations
+
+import logging
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Thread
+
+from ..github.webhooks import WebhookReceiver
+
+log = logging.getLogger(__name__)
+
+DEFAULT_PATH = "/github/webhook"
+# Seconds a client may take to send its request; stops slow clients from holding threads.
+REQUEST_TIMEOUT_S = 10
+
+
+class WebhookServer:
+    def __init__(
+        self,
+        receiver: WebhookReceiver,
+        host: str = "127.0.0.1",
+        port: int = 8080,
+        path: str = DEFAULT_PATH,
+    ) -> None:
+        handler = type("Handler", (_Handler,), {"receiver": receiver, "path_": path})
+        self._httpd = ThreadingHTTPServer((host, port), handler)
+        self._httpd.daemon_threads = True
+        self._thread: Thread | None = None
+
+    @property
+    def address(self) -> tuple[str, int]:
+        host, port = self._httpd.server_address[:2]
+        return str(host), int(port)
+
+    def start(self) -> None:
+        """Serve in a background thread."""
+        if self._thread is None:
+            self._thread = Thread(target=self._httpd.serve_forever, name="webhooks", daemon=True)
+            self._thread.start()
+            log.info("webhook server listening on %s:%d", *self.address)
+
+    def stop(self) -> None:
+        if self._thread is not None:
+            # shutdown() waits for serve_forever to exit, so only call it when it runs.
+            self._httpd.shutdown()
+            self._thread.join()
+            self._thread = None
+        self._httpd.server_close()
+
+
+class _Handler(BaseHTTPRequestHandler):
+    receiver: WebhookReceiver
+    path_: str
+    timeout = REQUEST_TIMEOUT_S
+    server_version = "octopus"
+    sys_version = ""
+
+    def do_POST(self) -> None:
+        if self.path.split("?", 1)[0] != self.path_:
+            self._reply(404, "not found")
+            return
+        length = self.headers.get("Content-Length")
+        if length is None or not length.isdigit():
+            # GitHub always sends Content-Length; chunked bodies are not accepted.
+            self._reply(411, "Content-Length required")
+            return
+        if int(length) > self.receiver.max_body_bytes:
+            # Refuse before reading, so an oversized body never lands in memory.
+            self._reply(413, "payload too large")
+            return
+        body = self.rfile.read(int(length))
+        if len(body) != int(length):
+            self._reply(400, "truncated body")
+            return
+        resp = self.receiver.handle(dict(self.headers.items()), body)
+        self._reply(resp.status, resp.message)
+
+    def do_GET(self) -> None:
+        self._reply(405 if self.path.split("?", 1)[0] == self.path_ else 404, "use POST")
+
+    def _reply(self, status: int, message: str) -> None:
+        data = (message + "\n").encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        if status >= 400:
+            # The body may not have been read; do not reuse the connection.
+            self.send_header("Connection", "close")
+            self.close_connection = True
+        self.end_headers()
+        self.wfile.write(data)
+
+    def log_message(self, format: str, *args: object) -> None:
+        log.debug("%s %s", self.address_string(), format % args)
