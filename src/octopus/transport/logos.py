@@ -47,34 +47,22 @@ def _load_bindings():
     return logosdelivery
 
 
+PRESET = "logos.test"
+
+
 @dataclass
 class LogosConfig:
-    """Octopus-level settings, translated to a liblogosdelivery node config."""
+    """Octopus-level settings: the network comes from the `logos.test` preset."""
 
     mode: str = "Core"  # "Core" (relay, for coordinators) or "Edge" (light client)
-    preset: str | None = None
-    cluster_id: int | None = None
-    num_shards: int | None = None
     entry_nodes: list[str] = field(default_factory=list)
-    tcp_port: int | None = None
-    nat: str | None = None
-    overrides: dict = field(default_factory=dict)
+    overrides: dict = field(default_factory=dict)  # raw `messagingOverrides`
 
     def to_node_config(self) -> dict:
-        cfg: dict = {"mode": self.mode}
-        if self.preset is not None:
-            cfg["preset"] = self.preset
         ov = dict(self.overrides)
-        if self.cluster_id is not None:
-            ov["cluster-id"] = self.cluster_id
-        if self.num_shards is not None:
-            ov["num-shards-in-network"] = self.num_shards
         if self.entry_nodes:
             ov["entry-node"] = list(self.entry_nodes)
-        if self.tcp_port is not None:
-            ov["tcp-port"] = self.tcp_port
-        if self.nat is not None:
-            ov["nat"] = self.nat
+        cfg: dict = {"mode": self.mode, "preset": PRESET}
         if ov:
             cfg["messagingOverrides"] = ov
         return cfg

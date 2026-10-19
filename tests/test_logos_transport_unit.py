@@ -201,19 +201,17 @@ def test_supervisor_restarts_only_after_grace():
 
 def test_config_helper():
     cfg = LogosConfig(
-        mode="Edge", cluster_id=198, num_shards=1, entry_nodes=["/ip4/1.2.3.4/tcp/60000/p2p/x"],
-        tcp_port=60001, nat="any",
+        mode="Edge", entry_nodes=["/ip4/1.2.3.4/tcp/60000/p2p/x"], overrides={"tcp-port": 60001}
     ).to_node_config()
     assert cfg == {
         "mode": "Edge",
+        "preset": "logos.test",
         "messagingOverrides": {
-            "cluster-id": 198,
-            "num-shards-in-network": 1,
-            "entry-node": ["/ip4/1.2.3.4/tcp/60000/p2p/x"],
             "tcp-port": 60001,
-            "nat": "any",
+            "entry-node": ["/ip4/1.2.3.4/tcp/60000/p2p/x"],
         },
     }
+    assert LogosConfig().to_node_config() == {"mode": "Core", "preset": "logos.test"}
 
 
 def test_missing_library_error(monkeypatch, tmp_path):
