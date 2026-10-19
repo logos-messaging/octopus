@@ -90,13 +90,8 @@ class LogosTransport(Transport):
     def __init__(
         self,
         config: LogosConfig | dict,
-        *,
-        auto_restart_after_s: float | None = None,
-        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._config = config.to_node_config() if isinstance(config, LogosConfig) else config
-        self._auto_restart_after_s = auto_restart_after_s
-        self._clock = clock
         self._handlers: dict[str, Handler] = {}
         self._status_cbs: list[StatusCallback] = []
         self._node = None
@@ -104,13 +99,10 @@ class LogosTransport(Transport):
         # Bumped per node so events from a destroyed node are ignored.
         self._gen = 0
         self._queue: queue.Queue = queue.Queue()
-        self._worker: threading.Thread | None = None
-        self._supervisor: threading.Thread | None = None
-        self._stop_evt = threading.Event()
+        self._handler_thread: threading.Thread | None = None
         self._lock = threading.RLock()
         self._status_cond = threading.Condition()
         self._status = DISCONNECTED
-        self._disconnected_since: float | None = None
         self._seen: OrderedDict[str, None] = OrderedDict()
         self.dropped_events = 0
 
@@ -121,34 +113,28 @@ class LogosTransport(Transport):
             if self._running:
                 return
             self._running = True
-            self._stop_evt.clear()
             self._queue = queue.Queue()
-            self._worker = threading.Thread(target=self._dispatch, name="octopus-ld", daemon=True)
-            self._worker.start()
+            self._handler_thread = threading.Thread(
+                target=self._dispatch, name="octopus-ld", daemon=True
+            )
+            self._handler_thread.start()
             try:
                 self._node = self._create_node()
             except Exception:
                 self._teardown()
                 raise
             self._refresh_status()
-            if self._auto_restart_after_s is not None:
-                self._supervisor = threading.Thread(
-                    target=self._supervise, name="octopus-ld-sup", daemon=True
-                )
-                self._supervisor.start()
 
     def stop(self) -> None:
-        # Handlers and the supervisor take self._lock, so it must not be held
-        # while joining their threads.
+        # Handlers take self._lock, so it must not be held while joining their thread.
         with self._lock:
             if not self._running:
                 return
-            node, worker, supervisor = self._detach()
+            node, handler_thread = self._detach()
         if node is not None:
             node.stop_and_destroy()
-        for thread in (supervisor, worker):
-            if thread is not None and thread is not threading.current_thread():
-                thread.join(timeout=5)
+        if handler_thread is not None and handler_thread is not threading.current_thread():
+            handler_thread.join(timeout=5)
         self._set_status(DISCONNECTED, notify=False)
 
     def restart(self) -> None:
@@ -164,8 +150,6 @@ class LogosTransport(Transport):
             if old is not None:
                 old.stop_and_destroy()
             self._node = self._create_node()
-            with self._status_cond:
-                self._disconnected_since = None
             self._refresh_status()
 
     def __enter__(self) -> LogosTransport:
@@ -245,10 +229,10 @@ class LogosTransport(Transport):
         self._status_cbs.append(cb)
 
     def wait_connected(self, timeout: float) -> bool:
-        deadline = self._clock() + timeout
+        deadline = time.monotonic() + timeout
         with self._status_cond:
             while self._status == DISCONNECTED:
-                remaining = deadline - self._clock()
+                remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     return False
                 self._status_cond.wait(remaining)
@@ -262,21 +246,19 @@ class LogosTransport(Transport):
         return self._node
 
     def _detach(self):
-        """Mark stopped and take ownership of the node and threads. Lock held."""
+        """Mark stopped and take ownership of the node and handler thread. Lock held."""
         self._running = False
         self._gen += 1
-        self._stop_evt.set()
         node, self._node = self._node, None
-        worker, self._worker = self._worker, None
-        supervisor, self._supervisor = self._supervisor, None
-        if worker is not None:
+        handler_thread, self._handler_thread = self._handler_thread, None
+        if handler_thread is not None:
             self._queue.put(None)
-        return node, worker, supervisor
+        return node, handler_thread
 
     def _teardown(self) -> None:
-        _, worker, _ = self._detach()
-        if worker is not None:
-            worker.join(timeout=5)
+        _, handler_thread = self._detach()
+        if handler_thread is not None:
+            handler_thread.join(timeout=5)
 
     def _create_node(self):
         ld = _load_bindings()
@@ -311,11 +293,6 @@ class LogosTransport(Transport):
         with self._status_cond:
             changed = status != self._status
             self._status = status
-            if status == DISCONNECTED:
-                if self._disconnected_since is None:
-                    self._disconnected_since = self._clock()
-            else:
-                self._disconnected_since = None
             self._status_cond.notify_all()
         if changed and notify:
             self._queue.put(("status", status))
@@ -370,24 +347,3 @@ class LogosTransport(Transport):
             self._seen[mhash] = None
             if len(self._seen) > _DEDUP_SIZE:
                 self._seen.popitem(last=False)
-
-    def _supervise(self) -> None:
-        backoff = 1.0
-        while not self._stop_evt.wait(1.0):
-            if self._should_restart():
-                try:
-                    self.restart()
-                    backoff = 1.0
-                except Exception:
-                    log.exception("could not restart logos node")
-                    self._stop_evt.wait(backoff)
-                    backoff = min(backoff * 2, 60.0)
-
-    def _should_restart(self) -> bool:
-        with self._status_cond:
-            since = self._disconnected_since
-        return (
-            self._auto_restart_after_s is not None
-            and since is not None
-            and self._clock() - since >= self._auto_restart_after_s
-        )

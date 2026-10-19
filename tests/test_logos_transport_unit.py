@@ -187,22 +187,6 @@ def test_restart_resubscribes(transport):
     assert second.subscribed == ["/a", "/b"]
 
 
-def test_supervisor_restarts_only_after_grace():
-    now = [0.0]
-    t = LogosTransport({}, auto_restart_after_s=30, clock=lambda: now[0])
-    t.start()
-    try:
-        FakeNode.instances[0].emit({"eventType": "node_health_change", "status": "Disconnected"})
-        now[0] = 29
-        assert not t._should_restart()
-        now[0] = 31
-        assert t._should_restart()
-        t.restart()
-        assert not t._should_restart()
-    finally:
-        t.stop()
-
-
 def test_config_helper():
     cfg = LogosConfig(
         mode="Edge", entry_nodes=["/ip4/1.2.3.4/tcp/60000/p2p/x"], overrides={"tcp-port": 60001}
