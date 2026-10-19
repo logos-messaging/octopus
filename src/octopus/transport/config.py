@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping, Sequence
 
-# The logos.test preset supplies the cluster, shards and fleet entry nodes.
+# Octopus always runs on the logos.test network (cluster, shards and fleet entry nodes).
 PRESET = "logos.test"
 DEFAULT_TCP_PORT = 60000
 
@@ -44,7 +44,7 @@ def runner_config(
     tcp_port: int = DEFAULT_TCP_PORT,
     nat: str | None = None,
 ) -> dict:
-    """A runner dials out, so a plain NAT works. `entry_nodes` replaces the preset's own.
+    """A runner dials out, so a plain NAT works. `entry_nodes` replaces the default fleet nodes.
 
     `nat` is e.g. "any" to try UPnP/NAT-PMP.
     """
