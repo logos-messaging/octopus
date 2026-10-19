@@ -44,7 +44,7 @@ def runner_config(
     tcp_port: int = DEFAULT_TCP_PORT,
     nat: str | None = None,
 ) -> dict:
-    """A runner dials out, so a plain NAT works. `entry_nodes` replaces the default fleet nodes.
+    """A runner dials out, so a plain NAT works. `entry_nodes` are extra connections, added to the default fleet nodes.
 
     `nat` is e.g. "any" to try UPnP/NAT-PMP.
     """

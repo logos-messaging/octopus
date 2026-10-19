@@ -6,7 +6,7 @@ Verified against `liblogosdelivery` (logos-delivery `v0.39.0-45`) with `tests/te
 `octopus.transport.config` builds the config passed to `NodeWrapper.create_and_start`.
 The network is fixed internally to `logos.test`, whose fleet provides discovery and bootstrap; Octopus traffic uses
 its own `/octopus/1/...` content topics. Coordinators are still needed for GitHub and scheduling. An explicit
-`entry-node` list replaces the fleet entry nodes, so only set it to point at specific coordinators.
+`entry-node` list is added on top of the fleet entry nodes (logos-delivery concatenates both), so use it to connect to specific coordinators.
 
 ## Coordinator (public IP)
 - `coordinator_config(public_ip, tcp_port=60000, entry_nodes=[other coordinators])`.
