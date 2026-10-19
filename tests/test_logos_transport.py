@@ -1,27 +1,52 @@
-import os
+import threading
 import time
 
 import pytest
 
 pytestmark = pytest.mark.needs_lib
 
+TOPIC = "/octopus/1/test/proto"
+
+
+def _ports(base: int) -> dict:
+    return {
+        "tcp-port": base,
+        "discv5-udp-port": base + 1,
+        "quic-port": base + 2,
+        "nat": "none",
+    }
+
 
 def test_two_nodes_exchange_message():
-    from octopus.transport.logos import LogosTransport
+    from octopus.transport.logos import LogosConfig, LogosTransport
 
-    cfg = {"mode": "Core", "clusterId": 198, "numShardsInNetwork": 1}
-    a, b = LogosTransport(cfg), LogosTransport(cfg)
+    a = LogosTransport(
+        LogosConfig(mode="Core", cluster_id=198, num_shards=1, overrides=_ports(60110))
+    )
     got = []
     a.start()
-    b.start()
     try:
-        b.subscribe("/octopus/1/test/proto", lambda t, p: got.append(p))
-        time.sleep(5)
-        a.publish("/octopus/1/test/proto", b"hello")
-        deadline = time.time() + 30
-        while not got and time.time() < deadline:
-            time.sleep(0.5)
-        assert got == [b"hello"]
+        tcp_addr = next(m for m in a.multiaddrs() if "/tcp/" in m)
+        b = LogosTransport(
+            LogosConfig(
+                mode="Core",
+                cluster_id=198,
+                num_shards=1,
+                entry_nodes=[tcp_addr],
+                overrides=_ports(60120),
+            )
+        )
+        b.start()
+        try:
+            b.subscribe(TOPIC, lambda t, p: got.append((p, threading.current_thread().name)))
+            a.subscribe(TOPIC, lambda t, p: None)
+            time.sleep(10)  # let the mesh form
+            a.publish(TOPIC, b"hello")
+            deadline = time.time() + 30
+            while not got and time.time() < deadline:
+                time.sleep(0.5)
+            assert got == [(b"hello", "octopus-ld")]
+        finally:
+            b.stop()
     finally:
         a.stop()
-        b.stop()
