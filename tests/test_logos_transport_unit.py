@@ -1,5 +1,6 @@
 import base64
 import json
+import sys
 import threading
 import types
 
@@ -7,6 +8,9 @@ import pytest
 
 from octopus.transport import logos
 from octopus.transport.logos import LogosConfig, LogosLibraryError, LogosTransport
+
+
+_real_load = logos._load_bindings
 
 
 class Res:
@@ -215,8 +219,89 @@ def test_config_helper():
 
 
 def test_missing_library_error(monkeypatch, tmp_path):
-    monkeypatch.undo()
+    monkeypatch.setattr(logos, "_load_bindings", _real_load)
     monkeypatch.setenv("OCTOPUS_BINDINGS", str(tmp_path))
-    monkeypatch.delitem(__import__("sys").modules, "logosdelivery", raising=False)
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    monkeypatch.delitem(sys.modules, "logosdelivery", raising=False)
     with pytest.raises(LogosLibraryError, match="lib/liblogosdelivery.so"):
         logos._load_bindings()
+
+
+def test_failed_restart_can_be_retried(transport, monkeypatch):
+    transport.subscribe("/a", lambda t, p: None)
+    real = FakeNode.create_and_start.__func__
+    monkeypatch.setattr(
+        FakeNode, "create_and_start", classmethod(lambda cls, c, event_cb=None: Res(err="boom"))
+    )
+    with pytest.raises(logos.LogosError, match="could not start logos node"):
+        transport.restart()
+    monkeypatch.setattr(FakeNode, "create_and_start", classmethod(real))
+    transport.restart()
+    assert FakeNode.instances[-1].subscribed == ["/a"]
+    transport.publish("/a", b"x")
+
+
+def test_failed_subscribe_is_not_recorded(transport, monkeypatch):
+    node = FakeNode.instances[0]
+    monkeypatch.setattr(node, "subscribe_content_topic", lambda t: Res(err="bad topic"))
+    with pytest.raises(logos.LogosError, match="could not subscribe to topic: /bad"):
+        transport.subscribe("/bad", lambda t, p: None)
+    assert "/bad" not in transport._handlers
+    transport.restart()  # replay must not trip over the failed topic
+
+
+def test_events_from_old_node_ignored_after_restart(transport):
+    got = []
+    transport.subscribe("/t", lambda t, p: got.append(p))
+    old = FakeNode.instances[0]
+    transport.restart()
+    old.emit(received("/t", b"stale", mhash="0xs"))
+    old.emit({"eventType": "node_health_change", "status": "Disconnected"})
+    FakeNode.instances[1].emit(received("/t", b"fresh", mhash="0xf"))
+    assert wait(lambda: got == [b"fresh"])
+    assert transport.status == "Connected"
+
+
+def test_events_after_stop_ignored():
+    t = LogosTransport({})
+    t.start()
+    node = FakeNode.instances[0]
+    t.stop()
+    node.emit({"eventType": "node_health_change", "status": "Connected"})
+    assert t.status == "Disconnected"
+
+
+def test_failed_handler_message_can_be_redelivered(transport):
+    calls = []
+
+    def handler(t, p):
+        calls.append(p)
+        if len(calls) == 1:
+            raise ValueError("transient")
+
+    transport.subscribe("/t", handler)
+    node = FakeNode.instances[0]
+    node.emit(received("/t", b"x", mhash="0xr"))
+    node.emit(received("/t", b"x", mhash="0xr", source="history"))
+    assert wait(lambda: len(calls) == 2)
+
+
+def test_handler_can_subscribe_while_stopping():
+    t = LogosTransport({})
+    t.start()
+    started, done = threading.Event(), threading.Event()
+
+    def handler(topic, payload):
+        started.set()
+        threading.Event().wait(0.3)
+        try:
+            t.subscribe("/other", lambda *_: None)
+        except RuntimeError:
+            pass
+        done.set()
+
+    t.subscribe("/t", handler)
+    FakeNode.instances[0].emit(received("/t", b"x"))
+    assert started.wait(2)
+    t.stop()  # must not deadlock against the handler
+    assert done.wait(2)
