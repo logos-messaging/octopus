@@ -1,12 +1,14 @@
 import random
 import time
 
+from octopus.agent import DEFAULT_INTERVAL_S as AGENT_DEFAULT
 from octopus.agent import PresencePublisher, RunnerInfo
 from octopus.coordinator import Registry
+from octopus.coordinator.registry import DEFAULT_INTERVAL_S as REGISTRY_DEFAULT
 from octopus.proto import PRESENCE_TOPIC, Presence
 from octopus.transport import MemoryBus, MemoryTransport
 
-INTERVAL = 30.0
+INTERVAL = 10.0
 
 
 class FakeClock:
@@ -124,3 +126,16 @@ def test_property_no_idle_after_timeout():
         clock.advance(rng.uniform(0, 2 * INTERVAL))
         if last_beat is None or clock.now - last_beat > 3 * INTERVAL:
             assert registry.idle_runners() == []
+
+
+def test_defaults_agree_and_are_10s():
+    assert AGENT_DEFAULT == REGISTRY_DEFAULT == 10.0
+    bus = MemoryBus()
+    clock = FakeClock()
+    registry = Registry(MemoryTransport(bus), clock)  # default interval and missed
+    registry.start()
+    PresencePublisher(MemoryTransport(bus), RunnerInfo("r1", "linux", "x64")).tick()
+    clock.advance(30)
+    assert registry.get("r1") is not None
+    clock.advance(1)
+    assert registry.get("r1") is None
