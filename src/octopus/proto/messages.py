@@ -37,6 +37,8 @@ class Presence(BaseModel):
     capacity: int = 1
     busy: int = 0
     sent_at: float
+    # Sent once on graceful shutdown so coordinators drop the runner immediately.
+    offline: bool = False
 
 
 class JobOffer(BaseModel):
