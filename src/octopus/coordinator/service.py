@@ -1,0 +1,342 @@
+"""The coordinator process: what `octopus coordinator start` runs.
+
+Puts the pieces together: the logos-delivery node (transport), the presence registry, the
+scheduler with its offer sender and JIT runner provider, the log collector, and the GitHub
+webhook endpoint. A queued `workflow_job` goes: webhook (answered at once) -> trust worker
+(GitHub API: fork check, sender) -> scheduler -> encrypted offer to a runner -> statuses
+and the log back to the stores that `octopus jobs`, `logs` and `explain` read.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import queue
+import signal
+import tempfile
+import threading
+import time
+from collections.abc import Callable
+from pathlib import Path
+
+import httpx
+
+from ..crypto import encode_public_key, load_or_create_private_key, node_id
+from ..github.app import GitHubApiError, GitHubClient
+from ..github.runners import JitRunnerError, JitRunners, make_jit_provider
+from ..github.trust import resolve_trust_inputs
+from ..github.webhooks import WebhookReceiver, WorkflowJobEvent
+from ..policy import TrustPolicy
+from ..proto import FailureReason
+from ..transport import ChannelTransport
+from .config import CoordinatorConfig
+from .jobs import SqliteJobStore, State
+from .logs import LogCollector, LogStore
+from .offers import OfferSender
+from .registry import Registry
+from .scheduler import Scheduler, SchedulerConfig
+from .webhook_server import WebhookServer
+
+log = logging.getLogger(__name__)
+
+KEY_FILE = "coordinator.key"
+JOBS_DB = "jobs.db"
+LOGS_DB = "logs.db"
+STATE_FILE = "coordinator.state.json"
+ACTOR = "coordinator"
+QUEUE_SIZE = 1000
+TRUST_ATTEMPTS = 3
+# How often the state file (runners online, for `coordinator status`) is refreshed.
+MAINTENANCE_S = 10.0
+SWEEP_EVERY_S = 300.0
+PURGE_EVERY_S = 24 * 3600.0
+# Repos seen within this long get their orphaned runners swept.
+SWEEP_WINDOW_S = 24 * 3600.0
+_STOP = object()
+
+
+def state_path(directory: Path) -> Path:
+    return directory / STATE_FILE
+
+
+def read_state(directory: Path) -> dict | None:
+    """The state of a running coordinator, or None (no file, or its process is gone)."""
+    from ..agent.runner_agent import pid_alive
+
+    try:
+        state = json.loads(state_path(directory).read_text())
+    except (OSError, ValueError):
+        return None
+    pid = state.get("pid") if isinstance(state, dict) else None
+    return state if isinstance(pid, int) and pid_alive(pid) else None
+
+
+class Coordinator:
+    """One coordinator. `start()`, then `wait()` until `stop()` (or a signal)."""
+
+    def __init__(
+        self,
+        config: CoordinatorConfig,
+        transport: ChannelTransport,
+        github: GitHubClient,
+        directory: Path,
+        *,
+        scheduler_config: SchedulerConfig | None = None,
+        sleep: Callable[[float], None] = time.sleep,
+        retry_delay_s: float = 2.0,
+    ) -> None:
+        self._config = config
+        self._transport = transport
+        self._github = github
+        self._dir = directory
+        self._scheduler_config = scheduler_config or SchedulerConfig()
+        self._sleep = sleep
+        self._retry_delay_s = retry_delay_s
+        self._queue: queue.Queue = queue.Queue(maxsize=QUEUE_SIZE)
+        self._lock = threading.Lock()
+        self._repos_seen: dict[str, float] = {}
+        self._threads: list[threading.Thread] = []
+        self._stopping = threading.Event()
+        self._stopped = threading.Event()
+        self._started_at = 0.0
+        self._last_sweep = 0.0
+        self._last_purge = 0.0
+        self.coordinator_id = ""
+        self.public_key = ""
+        self.jobs: SqliteJobStore | None = None
+        self.logs: LogStore | None = None
+        self.registry: Registry | None = None
+        self.scheduler: Scheduler | None = None
+        self.collector: LogCollector | None = None
+        self.server: WebhookServer | None = None
+        self.jit: JitRunners | None = None
+
+    # lifecycle
+
+    def start(self) -> None:
+        self._dir.mkdir(parents=True, exist_ok=True)
+        key = load_or_create_private_key(self._dir / KEY_FILE)
+        self.coordinator_id = node_id(key.public_key())
+        self.public_key = encode_public_key(key.public_key())
+        self.jobs = SqliteJobStore(str(self._dir / JOBS_DB))
+        self.logs = LogStore(str(self._dir / LOGS_DB))
+        try:
+            self._transport.start()
+            self.registry = Registry(self._transport)
+            self.registry.start()
+            self.collector = LogCollector(self._transport, key, self.logs)
+            self.collector.start()
+            offers = OfferSender(self._transport, key, on_status=self._on_status)
+            self.jit = JitRunners(self._github)
+            policy = TrustPolicy(
+                allowed_repos=frozenset(self._config.allowed_repos),
+                allowed_orgs=frozenset(self._config.allowed_orgs),
+            )
+            self.scheduler = Scheduler(
+                self.registry,
+                self.jobs,
+                offers,
+                make_jit_provider(self.jit),
+                config=self._scheduler_config,
+                policy=policy,
+                logs=self.collector,
+            )
+            self.scheduler.start()
+            self._spawn(self._trust_worker, "octopus-trust")
+            receiver = WebhookReceiver(
+                [s.get_secret_value().encode() for s in self._config.webhook_secrets],
+                self._on_webhook,
+            )
+            self.server = WebhookServer(
+                receiver,
+                self._config.listen_host,
+                self._config.listen_port,
+                self._config.webhook_path,
+            )
+            self.server.start()
+        except BaseException:
+            self.stop()
+            raise
+        self._started_at = time.time()
+        self._spawn(self._maintenance, "octopus-maintenance")
+        self._write_state()
+
+    def wait(self) -> None:
+        self._stopped.wait()
+
+    def stop(self) -> None:
+        if self._stopping.is_set():
+            return
+        self._stopping.set()
+        if self.server is not None:
+            self.server.stop()
+        try:
+            self._queue.put_nowait(_STOP)
+        except queue.Full:
+            pass
+        for thread in self._threads:
+            thread.join(timeout=10)
+        for part in (self.scheduler, self.collector, self.registry):
+            if part is not None:
+                try:
+                    part.stop()
+                except Exception:
+                    log.exception("could not stop %s", type(part).__name__)
+        try:
+            self._transport.stop()
+        except Exception:
+            log.exception("could not stop the transport")
+        for store in (self.jobs, self.logs):
+            if store is not None:
+                store.close()
+        state_path(self._dir).unlink(missing_ok=True)
+        self._stopped.set()
+
+    def install_signal_handlers(self) -> None:
+        """Stop on SIGINT/SIGTERM. Main thread only."""
+
+        def _handler(signum, frame):
+            threading.Thread(target=self.stop, name="octopus-stop", daemon=True).start()
+
+        signal.signal(signal.SIGINT, _handler)
+        signal.signal(signal.SIGTERM, _handler)
+
+    @property
+    def webhook_address(self) -> tuple[str, int] | None:
+        return self.server.address if self.server is not None else None
+
+    # GitHub events
+
+    def _on_webhook(self, event: WorkflowJobEvent) -> None:
+        """Runs on the webhook request: must not block. Raising answers 500."""
+        with self._lock:
+            self._repos_seen[event.repo] = time.time()
+        if event.action == "queued":
+            try:
+                self._queue.put_nowait(event)
+            except queue.Full:
+                raise RuntimeError("trust queue full") from None
+        elif (
+            event.action == "completed"
+            and self.scheduler is not None
+            and self.scheduler.cancel(
+                str(event.job_id), f"GitHub completed the job before it ran: {event.conclusion}"
+            )
+        ):
+            log.info("job %s cancelled on GitHub while queued", event.job_id)
+
+    def _trust_worker(self) -> None:
+        while True:
+            event = self._queue.get()
+            if event is _STOP:
+                return
+            try:
+                self._submit(event)
+            except Exception:
+                log.exception("could not handle queued job %s", event.job_id)
+
+    def _submit(self, event: WorkflowJobEvent) -> None:
+        job_id = str(event.job_id)
+        error = ""
+        for attempt in range(TRUST_ATTEMPTS):
+            try:
+                context = resolve_trust_inputs(event, self._github).job_context()
+                break
+            except (GitHubApiError, httpx.HTTPError) as e:
+                error = str(e)
+                log.warning("trust check of job %s failed: %s", job_id, error)
+                if attempt + 1 < TRUST_ATTEMPTS and not self._stopping.is_set():
+                    self._sleep(self._retry_delay_s * 2**attempt)
+        else:
+            # Fail closed, and say why in the timeline.
+            assert self.jobs is not None
+            try:
+                self.jobs.create(job_id, event.repo, actor=ACTOR)
+            except ValueError:
+                return  # a repeat of a job already known
+            self.jobs.transition(
+                job_id,
+                State.FAILED,
+                actor=ACTOR,
+                reason=FailureReason.POLICY_REJECTED,
+                detail=f"could not check trust: {error}",
+            )
+            return
+        assert self.scheduler is not None
+        self.scheduler.submit(job_id, event.repo, list(event.labels), context)
+
+    def _on_status(self, status) -> None:
+        if self.scheduler is not None:
+            self.scheduler.on_status(status)
+
+    # upkeep
+
+    def _maintenance(self) -> None:
+        while not self._stopping.wait(MAINTENANCE_S):
+            try:
+                self.maintain()
+            except Exception:
+                log.exception("coordinator maintenance failed")
+
+    def maintain(self, now: float | None = None) -> None:
+        """Refresh the state file; sweep orphaned runners and purge old data when due."""
+        now = time.time() if now is None else now
+        self._write_state()
+        if now - self._last_sweep >= SWEEP_EVERY_S:
+            self._last_sweep = now
+            with self._lock:
+                repos = [r for r, t in self._repos_seen.items() if now - t < SWEEP_WINDOW_S]
+            for repo in repos:
+                try:
+                    removed = self.jit.sweep_orphans(repo) if self.jit else []
+                except (JitRunnerError, GitHubApiError, httpx.HTTPError) as e:
+                    log.warning("could not sweep runners of %s: %s", repo, e)
+                    continue
+                if removed:
+                    log.info("removed %d orphaned runner(s) from %s", len(removed), repo)
+        if now - self._last_purge >= PURGE_EVERY_S:
+            self._last_purge = now
+            from .jobs.sqlite import DEFAULT_RETENTION_S
+            from .logs import DEFAULT_RETENTION_S as LOG_RETENTION_S
+
+            if self.jobs is not None:
+                self.jobs.purge(DEFAULT_RETENTION_S)
+            if self.logs is not None:
+                self.logs.purge(LOG_RETENTION_S)
+
+    def _spawn(self, target: Callable[[], None], name: str) -> None:
+        thread = threading.Thread(target=target, name=name, daemon=True)
+        self._threads.append(thread)
+        thread.start()
+
+    def state(self) -> dict:
+        address = self.webhook_address
+        multiaddrs: list[str] = []
+        try:
+            multiaddrs = list(getattr(self._transport, "multiaddrs", list)())
+        except RuntimeError as e:  # the node may not be up yet
+            log.debug("no multiaddrs yet: %s", e)
+        return {
+            "pid": os.getpid(),
+            "coordinator_id": self.coordinator_id,
+            "public_key": self.public_key,
+            "webhook": f"http://{address[0]}:{address[1]}{self._config.webhook_path}"
+            if address
+            else "",
+            "webhook_url": self._config.webhook_url,
+            "multiaddrs": multiaddrs,
+            "auth": self._config.auth_mode,
+            "allowed_repos": self._config.allowed_repos,
+            "allowed_orgs": self._config.allowed_orgs,
+            "runners_online": len(self.registry.online()) if self.registry else 0,
+            "started_at": self._started_at,
+            "updated_at": time.time(),
+        }
+
+    def _write_state(self) -> None:
+        path = state_path(self._dir)
+        fd, tmp = tempfile.mkstemp(dir=self._dir, prefix=".state-", suffix=".tmp")
+        with os.fdopen(fd, "w") as f:
+            json.dump(self.state(), f)
+        os.replace(tmp, path)

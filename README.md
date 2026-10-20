@@ -25,7 +25,8 @@ other over [logos-delivery](https://github.com/logos-messaging/logos-delivery)
 not org members (or, for a repo set up with a token, cannot push to it). It is not a
 public runner pool.
 
-> Status: foundation only. The CLI commands are stubs; see the open issues for the plan.
+> Status: early. Runner and coordinator run end to end in tests; not yet tried against a real
+> GitHub runner and network. See the open issues for the plan.
 
 ## One CLI, two roles
 
@@ -55,6 +56,20 @@ and `OCTOPUS_NAT` override the saved file, and flags override both. Exit codes: 
 3 bad config, 4 network/library failure, 5 not running. The runner needs no GitHub login:
 the coordinator checks org membership. Until coordinator discovery (#38) the coordinator's
 public key is passed by hand.
+
+## Quickstart: run a coordinator
+
+On a host with a public IP, for one repo set up with a token:
+
+```bash
+octopus github setup --repo acme/app --webhook-url https://octopus.example.org/github/webhook
+OCTOPUS_PUBLIC_IP=203.0.113.7 octopus coordinator start --env-file coordinator.env
+octopus jobs                    # then, on the same host
+octopus explain <job>
+```
+
+`start` prints the public key and entry node runners need. Settings, the GitHub App
+alternative and the inspection commands: [docs/coordinator.md](docs/coordinator.md).
 
 ## Develop
 
@@ -92,7 +107,7 @@ Node mode: coordinators run `Core` (relay, public IP); runners on laptops can us
 - `src/octopus/proto/`: wire messages and content topics (`/octopus/1/...`)
 - `src/octopus/policy.py`: trust policy
 - `src/octopus/github/`: GitHub App and token auth, webhook verification and parsing, trust-policy inputs, repo setup
-- `src/octopus/coordinator/`: coordinator; so far the webhook HTTP endpoint
+- `src/octopus/coordinator/`: coordinator process, scheduler, offers, job and log stores, webhook endpoint, inspection
 - `src/octopus/agent/`: runner agent (config, presence, offers, trust, runner manager)
 - `docs/architecture.md`: design; `docs/github-app.md`: GitHub App setup; `docs/issues/`: the issue specs
 - `docs/github-setup.md`: one-repo setup with a token (`octopus github setup`)

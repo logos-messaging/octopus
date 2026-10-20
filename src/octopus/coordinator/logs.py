@@ -88,10 +88,17 @@ class LogStore:
         clock: Callable[[], float] = time.time,
         retention_s: float = DEFAULT_RETENTION_S,
         max_stream_bytes: int = DEFAULT_MAX_STREAM_BYTES,
+        readonly: bool = False,
     ) -> None:
+        """`readonly` opens an existing database for inspection (`octopus logs`)."""
         self._clock = clock
         self._max_bytes = max_stream_bytes
         self._lock = threading.RLock()
+        if readonly:
+            # Raises sqlite3.OperationalError if the file does not exist.
+            self._db = sqlite3.connect(f"file:{path}?mode=ro", uri=True, check_same_thread=False)
+            self._db.row_factory = sqlite3.Row
+            return
         self._db = sqlite3.connect(path, check_same_thread=False)
         self._db.row_factory = sqlite3.Row
         with self._lock:

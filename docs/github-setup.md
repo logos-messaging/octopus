@@ -54,7 +54,8 @@ does that on purpose. The env file is written before the hook is changed, so a f
 update leaves a secret that the next run reuses.
 
 **The ping** usually fails on the very first run, because the coordinator needs the env file
-to start. Start it with `coordinator.env`, then rerun the command. The failure says what
+to start. Start it with `octopus coordinator start --env-file coordinator.env`, then rerun
+the command. The failure says what
 GitHub saw: `401` means the coordinator has a different secret, `0` means GitHub could not
 connect.
 
@@ -64,8 +65,8 @@ unreachable.
 GitHub calls are retried on rate limits; reads are also retried on 5xx, writes are not
 (a write answered with a 5xx may still have happened; the next run finds it).
 
-The `OCTOPUS_*` variables in `coordinator.env` are what the coordinator reads; wiring them
-into `octopus coordinator start` is #23.
+Then start the coordinator with it: `octopus coordinator start --env-file coordinator.env`
+([coordinator.md](coordinator.md)).
 
 ## Who is trusted
 

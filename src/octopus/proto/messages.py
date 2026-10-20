@@ -27,6 +27,8 @@ class FailureReason(str, Enum):
     POLICY_REJECTED = "policy-rejected"
     RUNNER_LOST = "runner-lost"
     JOB_FAILED = "job-failed"
+    # GitHub cancelled the job (e.g. the workflow run) before a runner took it.
+    CANCELLED = "cancelled"
 
 
 class Presence(BaseModel):
