@@ -80,7 +80,7 @@ class FakeOffers:
 
 
 class Env:
-    def __init__(self, offers=None, jit=None, policy=None, **config) -> None:
+    def __init__(self, offers=None, jit=None, policy=None, logs=None, **config) -> None:
         self.clock = FakeClock()
         self.registry = FakeRegistry()
         self.store = SqliteJobStore(":memory:", clock=self.clock.now)
@@ -93,7 +93,7 @@ class Env:
 
         self.scheduler = Scheduler(
             self.registry, self.store, self.offers, jit or default_jit, self.clock,
-            SchedulerConfig(**config), InlineExecutor(), policy,
+            SchedulerConfig(**config), InlineExecutor(), policy, logs,
         )
 
     def state(self, job_id):
@@ -444,3 +444,70 @@ def test_runner_side_rejection_detail_reaches_the_timeline():
     details = [e.detail for e in env.store.timeline("j1") if e.detail]
     assert any("repo not allowed: acme/app" in d for d in details)
     assert env.state("j1") is State.FAILED
+
+
+# --- log collection hooks ---------------------------------------------------------------
+
+
+class FakeLogs:
+    def __init__(self, offers=None, fail=False):
+        self.events = []
+        self.offers = offers
+        self.fail = fail
+
+    def watch(self, job_id, runner):
+        # The offer must not have gone out yet: the first chunk would find nobody.
+        sent = list(self.offers.calls) if self.offers else []
+        self.events.append(("watch", job_id, runner.runner_id, len(sent)))
+        if self.fail:
+            raise RuntimeError("transport down")
+
+    def unwatch(self, job_id, runner_id):
+        self.events.append(("unwatch", job_id, runner_id))
+
+
+def test_logs_are_watched_before_the_offer():
+    offers = FakeOffers()
+    logs = FakeLogs(offers)
+    env = Env(offers=offers, logs=logs)
+    env.registry.add("r1")
+    env.scheduler.submit("j1", "acme/app")
+    env.scheduler.tick()
+    assert logs.events == [("watch", "j1", "r1", 0)]
+
+
+def test_logs_unwatched_when_the_offer_is_refused():
+    offers = FakeOffers([reject(), ACCEPT])
+    logs = FakeLogs()
+    env = Env(offers=offers, logs=logs)
+    env.registry.add("r1")
+    env.registry.add("r2")
+    env.scheduler.submit("j1", "acme/app")
+    env.scheduler.tick()
+    env.scheduler.tick()
+    first = env.offers.calls[0][1]
+    second = env.offers.calls[1][1]
+    assert logs.events == [
+        ("watch", "j1", first, 0),
+        ("unwatch", "j1", first),
+        ("watch", "j1", second, 0),
+    ]
+
+
+def test_logs_unwatched_when_the_runner_is_lost():
+    logs = FakeLogs()
+    env = Env(logs=logs)
+    env.registry.add("r1")
+    env.scheduler.submit("j1", "acme/app")
+    env.scheduler.tick()
+    env.registry.remove("r1")
+    env.scheduler.tick()
+    assert ("unwatch", "j1", "r1") in logs.events
+
+
+def test_a_failing_log_sink_does_not_block_the_job():
+    env = Env(logs=FakeLogs(fail=True))
+    env.registry.add("r1")
+    env.scheduler.submit("j1", "acme/app")
+    env.scheduler.tick()
+    assert env.state("j1") is State.ACKED

@@ -92,6 +92,15 @@ store to ignore repeated transitions.
 - **sender** and **org membership**: `GET /orgs/{org}/members/{sender}` (204 member, 404 not).
   For a repo owned by a user account only that user counts. Bots are never members.
 
+## JIT runner configs and orphan cleanup
+
+`octopus.github.JitRunners` registers one ephemeral runner per job: `POST /repos/{o}/{r}/actions/runners/generate-jitconfig` with the name `octopus-<runner>-<job>-<attempt>`, the labels `self-hosted, octopus, <os>, <arch>` plus the job's own, and runner group 1 (repository scope). `make_jit_provider(jit_runners)` is the scheduler's `JitProvider`: API failures become `JitConfigError`, so the job fails with `jitconfig-error`.
+
+- Calls are retried with backoff on 5xx and on rate limits (`Retry-After`, or `X-RateLimit-Reset` when the primary limit is hit); other 4xx fail at once. Delays are capped at 60 s.
+- The encoded config is a bearer credential: it is a `SecretStr`, and never appears in logs, reprs or error messages.
+- A runner registered for a job that never started (offer timed out, runner lost) is removed with `JitRunners.release(name)`. `sweep_orphans(repo, keep=...)` is the periodic safety net: it deletes `octopus-*` runners that are offline, idle, not in `keep` (jobs in flight) and, if this process issued them, older than the grace period (10 min).
+- Wiring `release` and `sweep_orphans` into the coordinator loop is part of the coordinator CLI work (#23).
+
 ## Check it works
 
 On the App's page, **Advanced → Recent deliveries** shows each delivery and the response.

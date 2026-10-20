@@ -87,9 +87,27 @@ class JobStatus(BaseModel):
     reason: FailureReason | None = None
 
 
+# A chunk's text is at most this many UTF-8 bytes, so even fully JSON-escaped it stays well
+# under the transport's message size limit.
+MAX_LOG_CHUNK_BYTES = 16 * 1024
+
+
 class LogChunk(BaseModel):
+    """Runner to coordinator, on the job's log channel. `seq` counts from 0 without gaps;
+    `final` marks the last chunk. Secrets are masked before a chunk is made."""
+
     kind: Literal["log-chunk"] = "log-chunk"
     job_id: str
     seq: int
     data: str
     final: bool = False
+
+
+class LogAck(BaseModel):
+    """Coordinator to runner: every chunk up to `seq` is stored (-1: none yet). The runner
+    resends from `seq + 1`. `complete` once the final chunk and everything before it is in."""
+
+    kind: Literal["log-ack"] = "log-ack"
+    job_id: str
+    seq: int
+    complete: bool = False
