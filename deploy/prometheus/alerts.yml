@@ -1,0 +1,41 @@
+groups:
+  - name: octopus-coordinator
+    rules:
+      - alert: CoordinatorDown
+        expr: up{job="octopus-coordinator"} == 0
+        for: 2m
+        labels: {severity: page}
+        annotations:
+          summary: "Octopus coordinator {{ $labels.instance }} is not answering scrapes"
+
+      - alert: NoRunnersOnline
+        expr: octopus_runners_online == 0
+        for: 10m
+        labels: {severity: warn}
+        annotations:
+          summary: "No runner is announcing itself to {{ $labels.instance }}"
+
+      - alert: JobsWaitingWithoutFreeRunner
+        expr: octopus_jobs{state="queued"} > 0 and (octopus_runner_slots{kind="capacity"} - octopus_runner_slots{kind="busy"}) <= 0
+        for: 15m
+        labels: {severity: warn}
+        annotations:
+          summary: "Jobs have been queued for 15m and every runner slot is busy or offline"
+
+      - alert: OffersTimingOut
+        expr: increase(octopus_offers_total{outcome="timeout"}[15m]) > 3
+        labels: {severity: warn}
+        annotations:
+          summary: "Runners are not answering job offers (check runners and the job channel)"
+
+      - alert: JobsFailingFast
+        expr: sum(increase(octopus_job_failures_total{reason=~"jitconfig-error|policy-rejected|runner-lost"}[30m])) > 5
+        labels: {severity: warn}
+        annotations:
+          summary: "Several jobs failed on the coordinator side in 30m; run `octopus jobs --failed`"
+
+      - alert: WebhookRejected
+        expr: increase(octopus_webhook_events_total{outcome=~"bad-signature|error"}[15m]) > 0
+        labels: {severity: warn}
+        annotations:
+          summary: "Webhook deliveries are being rejected (wrong secret after rotation, or probing)"
