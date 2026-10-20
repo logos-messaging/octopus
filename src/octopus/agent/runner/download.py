@@ -115,7 +115,12 @@ def _extract(archive: Path, root: Path, is_zip: bool) -> None:
                         raise RunnerDownloadError(
                             f"could not extract runner: device file in archive: {m.name}"
                         )
-                t.extractall(root, filter="data")
+                if hasattr(tarfile, "data_filter"):
+                    t.extractall(root, filter="data")
+                else:
+                    # Python < 3.10.12 has no extraction filters; every member was
+                    # checked above (paths, links, devices).
+                    t.extractall(root)
     except (tarfile.TarError, zipfile.BadZipFile, EOFError) as e:
         raise RunnerDownloadError(f"could not extract runner: {archive.name}: {e}") from e
 

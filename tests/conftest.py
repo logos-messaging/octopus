@@ -19,6 +19,20 @@ def octopus_job(name: str = "workflow_job.queued.json", **job_fields) -> dict:
     return payload
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _logos_shutdown():
+    """Stop the nodes liblogosdelivery still holds before the interpreter exits.
+
+    Without it the process segfaults at exit after the needs_lib tests pass.
+    """
+    yield
+    import sys
+
+    ld = sys.modules.get("logosdelivery")
+    if ld is not None:
+        ld.shutdown()
+
+
 @pytest.fixture(scope="session")
 def rsa_key_pem() -> bytes:
     from cryptography.hazmat.primitives import serialization
