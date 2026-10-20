@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 import httpx
 from pydantic import SecretStr
 
-from .app import GitHubApiError, GitHubApp, _error_message, repo_path
+from .app import GitHubApiError, GitHubClient, _error_message, repo_path
 
 if TYPE_CHECKING:
     from ..coordinator.scheduler import JitProvider
@@ -74,11 +74,11 @@ def _rate_limit_delay(resp: httpx.Response, now: float) -> float | None:
 
 
 class JitRunners:
-    """Creates and removes ephemeral runners through the GitHub App (repository scope)."""
+    """Creates and removes ephemeral runners (repository scope), with App or token auth."""
 
     def __init__(
         self,
-        app: GitHubApp,
+        app: GitHubClient,
         *,
         runner_group_id: int = DEFAULT_RUNNER_GROUP_ID,
         sleep: Callable[[float], None] = time.sleep,
