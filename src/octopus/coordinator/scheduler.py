@@ -62,6 +62,14 @@ class OfferSink(Protocol):
 JitProvider = Callable[["PendingJob", Presence], SecretStr]
 
 
+class ClusterEvents(Protocol):
+    """Tells peer coordinators when they can forget a job (see CoordinatorCluster)."""
+
+    def accepted(self, job_id: str) -> None: ...
+
+    def terminal(self, job_id: str) -> None: ...
+
+
 class LogSink(Protocol):
     """What the scheduler needs from LogCollector: listen for a job's log on a runner."""
 
@@ -122,7 +130,9 @@ class Scheduler:
         executor: Executor | None = None,
         policy: TrustPolicy | None = None,
         logs: LogSink | None = None,
+        events: ClusterEvents | None = None,
     ) -> None:
+        self._events = events
         self._policy = policy
         self._logs = logs
         self._registry = registry
@@ -311,6 +321,7 @@ class Scheduler:
 
     def _accepted(self, job: PendingJob, runner: Presence) -> None:
         self._transition(job.job_id, State.ACKED, detail=f"runner: {runner.runner_id}")
+        self._notify("accepted", job.job_id)
         with self._lock:
             self._inflight.pop(job.job_id, None)
             self._active[job.job_id] = (job, runner.runner_id)
@@ -411,4 +422,14 @@ class Scheduler:
         except (IllegalTransition, UnknownJob) as e:
             log.warning("could not move job to state %s: %s", state.value, e)
             return False
+        if state in (State.FINISHED, State.FAILED):
+            self._notify("terminal", job_id)
         return True
+
+    def _notify(self, what: str, job_id: str) -> None:
+        if self._events is None:
+            return
+        try:
+            getattr(self._events, what)(job_id)
+        except Exception:  # peers learn from the next heartbeat; never break scheduling
+            log.exception("could not tell peer coordinators: %s: job: %s", what, job_id)

@@ -24,6 +24,8 @@ from octopus.agent.logs import LogStreamer
 from octopus.agent.runner import RunResult
 from octopus.agent.runner_agent import KEY_FILE, RunnerAgent
 from octopus.coordinator import (
+    ClusterConfig,
+    CoordinatorCluster,
     JitConfigError,
     LogCollector,
     LogStore,
@@ -31,9 +33,16 @@ from octopus.coordinator import (
     Registry,
     Scheduler,
     SchedulerConfig,
+    to_coord_job,
+    to_job_context,
 )
 from octopus.coordinator.jobs import Job, SqliteJobStore, State
-from octopus.crypto import encode_public_key, generate_private_key, load_or_create_private_key
+from octopus.crypto import (
+    encode_public_key,
+    generate_private_key,
+    generate_signing_key,
+    load_or_create_private_key,
+)
 from octopus.github.webhooks import (
     DELIVERY_HEADER,
     EVENT_HEADER,
@@ -213,9 +222,32 @@ class FakeGitHub:
         return SecretStr(f"jit-{job.job_id}-attempt-{job.attempt}")
 
 
+class _Events:
+    """Forwards scheduler events to the node's cluster, which is created after the scheduler."""
+
+    def __init__(self, node: CoordinatorNode) -> None:
+        self._node = node
+
+    def accepted(self, job_id: str) -> None:
+        if self._node.cluster is not None:
+            self._node.cluster.accepted(job_id)
+
+    def terminal(self, job_id: str) -> None:
+        if self._node.cluster is not None:
+            self._node.cluster.terminal(job_id)
+
+
 class CoordinatorNode:
-    def __init__(self, cluster: Cluster, policy, config: SchedulerConfig, store_path: str) -> None:
+    def __init__(
+        self,
+        cluster: Cluster,
+        policy,
+        config: SchedulerConfig,
+        store_path: str,
+        cluster_config: ClusterConfig | None = None,
+    ) -> None:
         bus, clock = cluster.bus, cluster.clock
+        self.clock = clock
         self.key = generate_private_key()
         self.transport = MemoryTransport(bus)
         self.store = SqliteJobStore(store_path)
@@ -227,6 +259,9 @@ class CoordinatorNode:
             self.transport, self.key, clock, on_status=lambda s: self.scheduler.on_status(s)
         )
         self.logs = LogCollector(self.transport, self.key, self.log_store, clock=clock)
+        self.signing_key = generate_signing_key()
+        self.cluster_config = cluster_config
+        self.cluster: CoordinatorCluster | None = None
         self.scheduler = Scheduler(
             self.registry,
             self.store,
@@ -236,6 +271,7 @@ class CoordinatorNode:
             config,
             policy=policy,
             logs=self.logs,
+            events=_Events(self),
         )
         self.contexts: dict[int, JobContext] = {}
         self.webhooks = WebhookReceiver([SECRET], self._on_event, deliveries=DeliveryLog())
@@ -247,7 +283,25 @@ class CoordinatorNode:
         context = self.contexts.get(ev.job_id) or JobContext(
             repo=ev.repo, head_repo=ev.repo, sender_is_org_member=True, event="push"
         )
-        self.scheduler.submit(str(ev.job_id), ev.repo, ev.labels, context)
+        if self.cluster is not None:
+            self.cluster.submit(to_coord_job(str(ev.job_id), ev.repo, ev.labels, context))
+        else:
+            self.scheduler.submit(str(ev.job_id), ev.repo, ev.labels, context)
+
+    def join(self, peers: list[CoordinatorNode]) -> None:
+        """Gossip with `peers` (all coordinators, this one included)."""
+        self.cluster = CoordinatorCluster(
+            self.sender.coordinator_id,
+            self.signing_key,
+            {p.sender.coordinator_id: p.signing_key.public_key() for p in peers},
+            self.transport,
+            lambda job: self.scheduler.submit(
+                job.job_id, job.repo, job.labels, to_job_context(job)
+            ),
+            self.clock,
+            self.cluster_config,
+        )
+        self.cluster.start()
 
     def deliver(self, job_id: int, *, delivery_id: str | None = None, **ctx) -> WebhookResponse:
         """POST a signed `workflow_job.queued` for `job_id`; `ctx` overrides its trust context."""
@@ -290,6 +344,7 @@ class Cluster:
         coordinators: int = 1,
         policy: TrustPolicy | None = None,
         scheduler: SchedulerConfig | None = None,
+        cluster: ClusterConfig | None = None,
     ) -> None:
         self.root = root
         self.bus = MemoryBus()
@@ -297,8 +352,11 @@ class Cluster:
         policy = policy if policy is not None else TrustPolicy(allowed_orgs=frozenset({"acme"}))
         config = scheduler or SchedulerConfig(offer_ttl_s=2.0)
         self.coordinators = [
-            CoordinatorNode(self, policy, config, ":memory:") for _ in range(coordinators)
+            CoordinatorNode(self, policy, config, ":memory:", cluster) for _ in range(coordinators)
         ]
+        if coordinators > 1:
+            for c in self.coordinators:
+                c.join(self.coordinators)
         self.runners: list[RunnerNode] = []
 
     @property
@@ -319,7 +377,10 @@ class Cluster:
         return node
 
     def tick(self, coordinator: int = 0) -> None:
-        self.coordinators[coordinator].scheduler.tick()
+        node = self.coordinators[coordinator]
+        if node.cluster is not None:
+            node.cluster.tick()
+        node.scheduler.tick()
 
     def close(self) -> None:
         for r in self.runners:
@@ -327,4 +388,6 @@ class Cluster:
         for r in self.runners:
             r.agent.stop()
         for c in self.coordinators:
+            if c.cluster is not None:
+                c.cluster.stop()
             c.logs.stop()
