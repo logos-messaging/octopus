@@ -71,8 +71,10 @@ Node mode: coordinators run `Core` (relay, public IP); runners on laptops can us
 - `src/octopus/transport/`: `Transport` interface, `LogosTransport` (logos-delivery), `MemoryTransport` (tests)
 - `src/octopus/proto/`: wire messages and content topics (`/octopus/1/...`)
 - `src/octopus/policy.py`: trust policy
-- `src/octopus/{agent,coordinator,github}/`: roles, to be implemented
-- `docs/architecture.md`: design; `docs/issues/`: the issue specs
+- `src/octopus/github/`: GitHub App auth, webhook verification and parsing, trust-policy inputs
+- `src/octopus/coordinator/`: coordinator; so far the webhook HTTP endpoint
+- `src/octopus/agent/`: runner agent, to be implemented
+- `docs/architecture.md`: design; `docs/github-app.md`: GitHub App setup; `docs/issues/`: the issue specs
 
 ## License
 

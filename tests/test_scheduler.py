@@ -388,7 +388,12 @@ TRUST = TrustPolicy(allowed_repos=frozenset({"acme/app"}))
 
 
 def ctx(**kw):
-    base = {"repo": "acme/app", "head_repo": "acme/app", "sender_is_org_member": True}
+    base = {
+        "repo": "acme/app",
+        "head_repo": "acme/app",
+        "sender_is_org_member": True,
+        "event": "pull_request",
+    }
     return JobContext(**{**base, **kw})
 
 

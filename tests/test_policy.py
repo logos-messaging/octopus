@@ -38,12 +38,20 @@ def test_empty_allowlist_rejects_everything():
     assert not ok and "not allowed" in reason
 
 
-def test_dangerous_events_rejected_even_for_same_repo_members():
-    for event in ("pull_request_target", "workflow_run"):
+def test_push_and_pull_request_allowed():
+    assert POLICY.check(job(event="push"))[0]
+    assert POLICY.check(job(event="pull_request"))[0]
+
+
+def test_unsafe_events_rejected():
+    for event in ("pull_request_target", "workflow_run", "issue_comment", ""):
         ok, reason = POLICY.check(job(event=event))
-        assert not ok and event in reason
+        assert not ok and "event" in reason
 
 
-def test_denied_events_are_configurable():
-    relaxed = TrustPolicy(allowed_repos=frozenset({"acme/app"}), denied_events=frozenset())
+def test_allowed_events_are_configurable():
+    relaxed = TrustPolicy(
+        allowed_repos=frozenset({"acme/app"}), allowed_events=frozenset({"pull_request_target"})
+    )
     assert relaxed.check(job(event="pull_request_target"))[0]
+    assert not relaxed.check(job(event="push"))[0]

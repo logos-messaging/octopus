@@ -3,11 +3,11 @@
 Octopus runs CI jobs on team members' laptops. This covers what the trust policy protects against and what it does not. It is the starting point for the wider threat model (#27).
 
 ## What the policy enforces
-Only jobs that pass every check run: repo or org on the runner's allowlist, PR branch in the same repo, sender is an org member, trigger not in the denied events. Checked by the coordinator before offering and again by the runner before accepting. Everything unknown fails closed (no context, no allowlist, unreadable config).
+Only jobs that pass every check run: repo or org on the runner's allowlist, PR branch in the same repo, sender is an org member, trigger is `push` or `pull_request`. Checked by the coordinator before offering and again by the runner before accepting. Everything unknown fails closed (no context, no allowlist, unreadable config).
 
 ## Pitfalls handled
 - **Fork PRs** run attacker code. Rejected: the head repo must equal the repo (an unknown head repo, e.g. a deleted fork, never matches).
-- **`pull_request_target` / `workflow_run`** run in the base repo's context with its secrets, and workflows often check out the PR head. Denied by default (`DEFAULT_DENIED_EVENTS`), even for same-repo senders. Relax only knowingly via `TrustPolicy(denied_events=...)`.
+- **`pull_request_target` / `workflow_run`** run in the base repo's context with its secrets, and workflows often check out the PR head. Only `push` and `pull_request` are served (`SAFE_EVENTS`), even for same-repo senders; anything else, including an unknown event, is rejected. Widen only knowingly via `TrustPolicy(allowed_events=...)`.
 - **Bots** (dependabot, ...) are never org members.
 - **Case**: GitHub names are case-insensitive; the policy compares case-folded.
 - **Forged offers**: the runner re-checks, so an offer for a non-allowed repo is rejected (`policy-rejected`) even if a coordinator skipped its own check.

@@ -23,6 +23,7 @@ class FailureReason(str, Enum):
     OFFER_TIMEOUT = "offer-timeout"
     JITCONFIG_ERROR = "jitconfig-error"
     RUNNER_DOWNLOAD_FAILED = "runner-download-failed"
+    RUNNER_START_FAILED = "runner-start-failed"
     POLICY_REJECTED = "policy-rejected"
     RUNNER_LOST = "runner-lost"
     JOB_FAILED = "job-failed"
