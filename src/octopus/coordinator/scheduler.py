@@ -62,6 +62,14 @@ class OfferSink(Protocol):
 JitProvider = Callable[["PendingJob", Presence], SecretStr]
 
 
+class LogSink(Protocol):
+    """What the scheduler needs from LogCollector: listen for a job's log on a runner."""
+
+    def watch(self, job_id: str, runner: Presence) -> None: ...
+
+    def unwatch(self, job_id: str, runner_id: str) -> None: ...
+
+
 @dataclass(frozen=True)
 class SchedulerConfig:
     queue_timeout_s: float = 300.0
@@ -113,8 +121,10 @@ class Scheduler:
         config: SchedulerConfig | None = None,
         executor: Executor | None = None,
         policy: TrustPolicy | None = None,
+        logs: LogSink | None = None,
     ) -> None:
         self._policy = policy
+        self._logs = logs
         self._registry = registry
         self._store = store
         self._offers = offers
@@ -283,6 +293,8 @@ class Scheduler:
             self._fail(job, FailureReason.JITCONFIG_ERROR, f"could not create JIT config: {e}")
             return
         self._transition(job.job_id, State.OFFERED, detail=f"runner: {runner.runner_id}")
+        # Listen before the offer goes out, so the runner's first log chunk finds us.
+        self._watch_logs(job, runner)
         result = self._offers.send_offer(
             runner,
             job.job_id,
@@ -311,6 +323,7 @@ class Scheduler:
         detail = f"offer {result.outcome.value}: runner {runner.runner_id}"
         if result.detail:
             detail += f": {result.detail}"
+        self._unwatch_logs(job.job_id, runner.runner_id)
         self._release(runner.runner_id, job.job_id)
         with self._lock:
             self._inflight.pop(job.job_id, None)
@@ -336,6 +349,7 @@ class Scheduler:
             for job, rid in lost:
                 del self._active[job.job_id]
         for job, rid in lost:
+            self._unwatch_logs(job.job_id, rid)
             self._release(rid, job.job_id)
             job.tried.add(rid)
             self._retry_or_fail(job, FailureReason.RUNNER_LOST, f"runner lost: {rid}")
@@ -369,6 +383,22 @@ class Scheduler:
             )
 
     # helpers
+
+    def _watch_logs(self, job: PendingJob, runner: Presence) -> None:
+        if self._logs is None:
+            return
+        try:
+            self._logs.watch(job.job_id, runner)
+        except Exception:  # logs are best-effort; the job still runs
+            log.exception("could not watch logs of job %s", job.job_id)
+
+    def _unwatch_logs(self, job_id: str, runner_id: str) -> None:
+        if self._logs is None:
+            return
+        try:
+            self._logs.unwatch(job_id, runner_id)
+        except Exception:
+            log.exception("could not stop watching logs of job %s", job_id)
 
     def _fail(self, job: PendingJob, reason: FailureReason, detail: str) -> None:
         with self._lock:

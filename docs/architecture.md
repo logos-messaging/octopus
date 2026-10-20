@@ -21,7 +21,7 @@ See `docs/threat-model.md`.
 |---|---|
 | `presence` | runner announces (os, arch, labels, capacity), heartbeat |
 | `jobs-<runnerId>` | coordinator to runner: encrypted job offer; runner to coordinator: ack and status. Reliable channel |
-| `logs-<jobId>` | chunked, sequence-numbered log stream. Reliable channel |
+| `logs-<jobId>` | runner to coordinator: chunked, sequence-numbered, encrypted log stream; coordinator to runner: acks. Reliable channel |
 | `coord` | coordinator-to-coordinator gossip (assignment locks, ownership) |
 
 All code talks to a `Transport` interface; `LogosTransport` wraps `logosdelivery.NodeWrapper`, `MemoryTransport` is the test fake.
@@ -37,6 +37,14 @@ Offers travel over a logos-delivery reliable channel (SDS) with a per-channel ci
 - A runner accepts offers only from coordinators it was told to trust (`id -> public key`, id must match the key). Distribution of those keys is #38.
 - The channel confirms delivery; `JobAck` carries accept/reject and the `FailureReason`. `expires_at` and a per-offer `nonce` give expiry and replay protection (the cipher gives no freshness).
 - The cipher callbacks are cffi function pointers called inline on the library event loop: they only transform bytes and never log.
+
+## Job logs
+A job's output streams from the runner to the coordinator that offered it, on its own encrypted channel (`log_channel_id(coordinator, runner, job)` on `logs-<jobId>`, keyed like the job channel).
+
+- **Runner** (`octopus.agent.LogStreamer`): takes the runner's output line by line (`RunnerManager.run_job(on_output=streamer.write)`), masks secrets (the JIT config, and values a workflow registers with `::add-mask::`), and packs lines into `LogChunk`s of at most 16 KiB (`MAX_LOG_CHUNK_BYTES`, well under the transport's message limit even when JSON-escaped), sealed when full or after 1 s. Chunks are appended to a spool file (mode 0600, removed on close) and only their offsets stay in memory, so a long log or a long outage costs disk, not memory; the spool is capped (256 MiB, then a truncation note).
+- **Delivery**: at most `window` (16) chunks are unacknowledged. The coordinator answers each chunk with `LogAck(seq)`, the highest seq up to which it has everything; if no ack advances for `resend_after_s` (10 s) the runner resends from there (go-back-N). Lost chunks, lost acks, duplicates, reordering, a dropped connection and a coordinator restart all recover this way. `close()` sends a `final` chunk and waits (default 5 min) until the coordinator has the whole log.
+- **Coordinator** (`octopus.coordinator.LogCollector`, `LogStore`): the scheduler calls `watch(job, runner)` just before the offer goes out (so the first chunk finds an open channel) and `unwatch` when the offer is refused or the runner is lost. Chunks go to SQLite keyed by (job, runner, seq): repeats are ignored, gaps are tracked, and a job retried on another runner gets a separate stream (readers get the newest unless they ask). After a restart, `watch` re-sends the stored position so the runner resumes there. `read(job, start, end)` serves ranges in batches and `tail(job, n)` the last lines for `octopus explain`. Streams are capped (100 MiB) and kept 30 days.
+- `actions/runner` prints job boundaries on its console (`Running job: <name>`, `Job <name> completed with result: <result>`); `LogStreamer(on_marker=...)` reports them. Step output is uploaded to GitHub by the runner's worker process; streaming it too (from the worker's `_diag` pages) is a possible follow-up.
 
 ## Runner manager
 `octopus.agent.runner.RunnerManager` (runner hosts) downloads the pinned `actions/runner` release (`RUNNER_VERSION`, checksums in `release.py`, refreshed with `scripts/update_runner_version.py`), verifies SHA-256 and extracts it safely into `$OCTOPUS_DATA_DIR/runner/<version>/`. Each job runs in a fresh copy of that tree (`bin/` and `externals/` hard-linked), in its own process group, with a maximum duration; the whole process tree is killed on timeout or `stop()` and the job directory is always removed. The JIT config goes to the runner through `ACTIONS_RUNNER_INPUT_JITCONFIG` (not argv, so it is not visible in `ps`) and is scrubbed from output, errors and logs. `run_job` returns a `RunResult` with a `FailureReason`: `runner-download-failed`, `runner-start-failed`, `job-failed` (non-zero exit or timeout), `runner-lost` (stopped).
