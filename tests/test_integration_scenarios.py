@@ -285,11 +285,15 @@ def test_live_coordinators_never_both_offer_a_job(tmp_path):
         jobs = [owned_by(cluster, 0), owned_by(cluster, 1)]
         for job in jobs:
             cluster.coordinators[0].deliver(job)
-        for _ in range(3):
+
+        def both_ran() -> bool:
+            # The runner takes one job at a time: the second is offered on a later tick,
+            # once the first has finished.
             cluster.tick(0)
             cluster.tick(1)
-            wait_until(lambda: len(node.runs) >= 1, what="a job started")
-        wait_until(lambda: sorted(node.runs) == sorted(map(str, jobs)), what="both jobs ran")
+            return sorted(node.runs) == sorted(map(str, jobs))
+
+        wait_until(both_ran, what="both jobs ran")
         offers = [r for c in cluster.coordinators for r in c.github.requests]
         assert sorted(offers) == sorted(map(str, jobs))
     finally:
