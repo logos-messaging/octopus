@@ -3,13 +3,18 @@ runners, tracks the job lifecycle and serves logs."""
 
 from .offers import OfferOutcome, OfferResult, OfferSender
 from .registry import Entry, MemoryStore, Registry, RegistryStore
+from .scheduler import JitConfigError, PendingJob, Scheduler, SchedulerConfig
 
 __all__ = [
     "Entry",
+    "JitConfigError",
     "MemoryStore",
     "OfferOutcome",
     "OfferResult",
     "OfferSender",
+    "PendingJob",
     "Registry",
     "RegistryStore",
+    "Scheduler",
+    "SchedulerConfig",
 ]

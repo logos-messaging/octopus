@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import secrets
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 
@@ -11,7 +12,15 @@ from pydantic import SecretStr, ValidationError
 
 from ..clock import Clock, SystemClock
 from ..crypto import PairCipher, decode_public_key, derive_channel_key, encode_public_key, node_id
-from ..proto import FailureReason, JobAck, JobOffer, Presence, job_channel_id, jobs_topic
+from ..proto import (
+    FailureReason,
+    JobAck,
+    JobOffer,
+    JobStatus,
+    Presence,
+    job_channel_id,
+    jobs_topic,
+)
 from ..transport import ChannelTransport
 
 log = logging.getLogger(__name__)
@@ -39,7 +48,9 @@ class OfferSender:
         transport: ChannelTransport,
         private_key: X25519PrivateKey,
         clock: Clock | None = None,
+        on_status: Callable[[JobStatus], None] | None = None,
     ) -> None:
+        self._on_status = on_status
         self._transport = transport
         self._key = private_key
         self._clock = clock or SystemClock()
@@ -123,9 +134,19 @@ class OfferSender:
         try:
             ack = JobAck.model_validate_json(payload)
         except ValidationError:
+            self._dispatch_status(payload)
             return
         with self._lock:
             waiting = self._waiting.get(ack.job_id)
         if waiting is not None:
             waiting[1].append(ack)
             waiting[0].set()
+
+    def _dispatch_status(self, payload: bytes) -> None:
+        if self._on_status is None:
+            return
+        try:
+            status = JobStatus.model_validate_json(payload)
+        except ValidationError:
+            return
+        self._on_status(status)
