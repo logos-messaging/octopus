@@ -11,10 +11,13 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+
 from ..crypto import encode_public_key, load_or_create_private_key
 from ..proto import FailureReason, JobOffer, JobStatus
 from ..transport import ChannelTransport
 from .config import RunnerConfig
+from .logs import DEFAULT_DRAIN_S, LogStreamer, RunnerMarker
 from .offers import OfferReceiver
 from .presence import PresencePublisher, RunnerInfo
 from .runner import RunnerManager, default_data_dir
@@ -24,6 +27,9 @@ log = logging.getLogger(__name__)
 
 STATE_FILE = "runner.state.json"
 KEY_FILE = "node.key"
+LOG_SPOOL_DIR = "logs"
+# On shutdown a job's log gets at most this long to reach the coordinator.
+STOP_DRAIN_S = 10.0
 
 ManagerFactory = Callable[[], RunnerManager]
 
@@ -60,7 +66,9 @@ class RunnerAgent:
     """Runner host: announces presence, accepts allowlisted offers and runs them.
 
     The offer handler only reserves a slot and returns, because the ack is sent right after
-    it returns; the job itself runs on a worker thread.
+    it returns; the job itself runs on a worker thread. Its output streams to the offering
+    coordinator as it runs; after the job the slot is freed first, then the rest of the log
+    is delivered (up to `log_drain_s`).
     """
 
     def __init__(
@@ -71,12 +79,15 @@ class RunnerAgent:
         *,
         data_dir: Path | None = None,
         manager_factory: ManagerFactory | None = None,
+        log_drain_s: float = DEFAULT_DRAIN_S,
     ) -> None:
         self._config = config
         self._allowlist = allowlist
         self._transport = transport
         self._data_dir = data_dir or default_data_dir()
         self._manager_factory = manager_factory or (lambda: RunnerManager(self._data_dir))
+        self._log_drain_s = log_drain_s
+        self._key: X25519PrivateKey | None = None
         self._lock = threading.Lock()
         self._active: dict[str, RunnerManager] = {}
         self._workers: list[threading.Thread] = []
@@ -89,6 +100,8 @@ class RunnerAgent:
 
     def start(self) -> None:
         key = load_or_create_private_key(self._data_dir / KEY_FILE)
+        self._key = key
+        self._clear_spools()
         self._transport.start()
         receiver = OfferReceiver(
             self._transport,
@@ -170,8 +183,13 @@ class RunnerAgent:
         self._status(
             offer, JobStatus(job_id=offer.job_id, runner_id=self.runner_id, state="runner-started")
         )
+        streamer = self._open_log(offer)
         try:
-            result = manager.run_job(offer.job_id, offer.jit_config.get_secret_value())
+            result = manager.run_job(
+                offer.job_id,
+                offer.jit_config.get_secret_value(),
+                on_output=streamer.write if streamer is not None else None,
+            )
             final = JobStatus(
                 job_id=offer.job_id,
                 runner_id=self.runner_id,
@@ -190,8 +208,67 @@ class RunnerAgent:
         finally:
             with self._lock:
                 self._active.pop(offer.job_id, None)
+            if streamer is not None:
+                streamer.finish()
         self._status(offer, final)
         self._busy_changed()
+        if streamer is not None:
+            self._drain_log(streamer)
+
+    # logs
+
+    def _open_log(self, offer: JobOffer) -> LogStreamer | None:
+        """Start streaming the job's output. Logs are best-effort: a failure here is
+        reported and the job runs without them."""
+        pubkey = self._config.trusted_coordinators().get(offer.coordinator_id)
+        if pubkey is None or self._key is None:
+            log.warning("no log stream: unknown coordinator: job: %s", offer.job_id)
+            return None
+
+        def on_marker(marker: RunnerMarker) -> None:
+            if marker.kind == "job-started":
+                self._status(
+                    offer,
+                    JobStatus(
+                        job_id=offer.job_id,
+                        runner_id=self.runner_id,
+                        state="step",
+                        step=marker.name,
+                    ),
+                )
+
+        try:
+            streamer = LogStreamer(
+                self._transport,
+                self._key,
+                offer.coordinator_id,
+                pubkey,
+                offer.job_id,
+                self._data_dir / LOG_SPOOL_DIR,
+                secrets=[offer.jit_config.get_secret_value()],
+                on_marker=on_marker,
+            )
+            streamer.start()
+        except Exception:
+            log.warning("no log stream: could not open it: job: %s", offer.job_id, exc_info=True)
+            return None
+        return streamer
+
+    def _drain_log(self, streamer: LogStreamer) -> None:
+        """Wait for the coordinator to have the whole log; less long when stopping."""
+        started = time.monotonic()
+        while not streamer.complete:
+            elapsed = time.monotonic() - started
+            limit = min(STOP_DRAIN_S, self._log_drain_s) if self._stopping else self._log_drain_s
+            if elapsed >= limit:
+                break
+            time.sleep(min(0.2, limit - elapsed))
+        streamer.close(timeout_s=0)
+
+    def _clear_spools(self) -> None:
+        """Spool files left by a crash hold logs nobody will send; remove them."""
+        for path in (self._data_dir / LOG_SPOOL_DIR).glob("*.spool"):
+            path.unlink(missing_ok=True)
 
     def _status(self, offer: JobOffer, status: JobStatus) -> None:
         if self._receiver is None:
