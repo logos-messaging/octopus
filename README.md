@@ -25,7 +25,7 @@ other over [logos-delivery](https://github.com/logos-messaging/logos-delivery)
 not org members (or, for a repo set up with a token, cannot push to it). It is not a
 public runner pool.
 
-> Status: foundation only. The CLI commands are stubs; see the open issues for the plan.
+> Status: work in progress; see the open issues and the MVP milestone. Read the [threat model](docs/threat-model.md) before lending a machine.
 
 ## One CLI, two roles
 
@@ -96,6 +96,7 @@ Node mode: coordinators run `Core` (relay, public IP); runners on laptops can us
 - `src/octopus/agent/`: runner agent (config, presence, offers, trust, runner manager)
 - `docs/architecture.md`: design; `docs/github-app.md`: GitHub App setup; `docs/issues/`: the issue specs
 - `docs/github-setup.md`: one-repo setup with a token (`octopus github setup`)
+- `docs/threat-model.md`: what Octopus protects against and what it does not; `CONTRIBUTING.md`: how to contribute
 
 ## License
 
