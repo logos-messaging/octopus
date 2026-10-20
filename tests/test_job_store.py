@@ -151,3 +151,13 @@ def test_retention_purges_old_terminal_jobs_only(tmp_path, clock):
     assert s2.get("old") is None and s2.timeline("old") == []
     assert s2.get("active") is not None
     s2.close()
+
+
+@pytest.mark.parametrize("state", [State.ASSIGNED, State.OFFERED, State.ACKED])
+def test_requeue_edge(store, state):
+    store.create("rq", "acme/app")
+    path = [State.ASSIGNED, State.OFFERED, State.ACKED]
+    for s in path[: path.index(state) + 1]:
+        store.transition("rq", s, actor="t")
+    store.transition("rq", State.QUEUED, actor="t", detail="retry")
+    assert store.get("rq").state == State.QUEUED

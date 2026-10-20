@@ -50,14 +50,16 @@ class State(str, Enum):
 
 TERMINAL = frozenset({State.FINISHED, State.FAILED})
 
+# Every state between QUEUED and a terminal one can return to QUEUED: the scheduler
+# re-queues a job when its runner refuses the offer, times out or disappears.
 ALLOWED: dict[State, frozenset[State]] = {
     State.QUEUED: frozenset({State.ASSIGNED, State.FAILED}),
-    State.ASSIGNED: frozenset({State.OFFERED, State.FAILED}),
-    State.OFFERED: frozenset({State.ACKED, State.FAILED}),
-    State.ACKED: frozenset({State.RUNNER_STARTED, State.FAILED}),
-    State.RUNNER_STARTED: frozenset({State.RUNNING, State.FINISHED, State.FAILED}),
+    State.ASSIGNED: frozenset({State.OFFERED, State.QUEUED, State.FAILED}),
+    State.OFFERED: frozenset({State.ACKED, State.QUEUED, State.FAILED}),
+    State.ACKED: frozenset({State.RUNNER_STARTED, State.QUEUED, State.FAILED}),
+    State.RUNNER_STARTED: frozenset({State.RUNNING, State.FINISHED, State.QUEUED, State.FAILED}),
     # RUNNING -> RUNNING records the next step.
-    State.RUNNING: frozenset({State.RUNNING, State.FINISHED, State.FAILED}),
+    State.RUNNING: frozenset({State.RUNNING, State.FINISHED, State.QUEUED, State.FAILED}),
     State.FINISHED: frozenset(),
     State.FAILED: frozenset(),
 }
