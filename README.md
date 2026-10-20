@@ -72,6 +72,10 @@ octopus explain <job>
 `start` prints the public key and entry node runners need. Settings, the GitHub App
 alternative and the inspection commands: [docs/coordinator.md](docs/coordinator.md).
 
+## Install
+
+See [docs/install.md](docs/install.md): one-line install, and `octopus runner install-service` to start at login.
+
 ## Develop
 
 Needs Python >= 3.10.

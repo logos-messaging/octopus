@@ -352,6 +352,58 @@ def runner_stop(timeout: float = typer.Option(60.0, help="Seconds to wait for sh
     typer.echo("stopped")
 
 
+@runner_app.command("install-service")
+def runner_install_service(config: Path | None = ConfigOption) -> None:
+    """Start the runner automatically at login (launchd, systemd --user or Task Scheduler)."""
+    from .agent import service
+
+    settings, _ = _resolve_settings(config, None, None, None, None)
+    allowlist, _ = _load_allowlist(config)
+    if not settings.coordinators and not settings.root_key:
+        typer.echo(
+            "warning: no trusted coordinator yet, the service will exit until you run: "
+            "octopus runner setup --coordinator <key> or --root-key <key>",
+            err=True,
+        )
+    if not allowlist.orgs and not allowlist.repos:
+        typer.echo(
+            "warning: nothing is allowed yet, run: octopus runner allow <org/repo>", err=True
+        )
+    try:
+        result = service.install(service.runner_spec(config))
+    except service.ServiceError as e:
+        raise _fail(f"could not install the service: {e}", 1) from e
+    typer.echo(f"service installed: {result.path}")
+    for note in result.notes:
+        typer.echo(f"note: {note}")
+
+
+@runner_app.command("uninstall-service")
+def runner_uninstall_service() -> None:
+    """Remove the automatic start. Settings, keys and the allowlist are kept."""
+    from .agent import service
+
+    try:
+        result = service.uninstall()
+    except service.ServiceError as e:
+        raise _fail(f"could not uninstall the service: {e}", 1) from e
+    typer.echo(f"service removed: {result.path}")
+
+
+@runner_app.command("service-status")
+def runner_service_status() -> None:
+    """Show whether the automatic start is installed and active."""
+    from .agent import service
+
+    try:
+        installed, description = service.status()
+    except service.ServiceError as e:
+        raise _fail(f"could not query the service: {e}", 1) from e
+    typer.echo(f"service: {description}")
+    if not installed:
+        raise typer.Exit(code=EXIT_NOT_RUNNING)
+
+
 EnvFileOption = typer.Option(
     None, "--env-file", help="OCTOPUS_* settings, e.g. the coordinator.env from github setup."
 )
