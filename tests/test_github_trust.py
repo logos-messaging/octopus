@@ -90,7 +90,10 @@ def test_non_member_is_rejected(rsa_key_pem):
     gh = FakeGitHub(member_status=404)
     inputs = resolve_trust_inputs(org_job(), make_app(rsa_key_pem, gh))
     assert not inputs.sender_is_org_member
-    assert POLICY.check(inputs.job_context()) == (False, "sender is not an org member")
+    assert POLICY.check(inputs.job_context()) == (
+        False,
+        "sender is not trusted: not an org member or repo writer",
+    )
 
 
 def test_membership_not_visible_counts_as_non_member(rsa_key_pem):

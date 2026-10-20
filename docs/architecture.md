@@ -5,10 +5,10 @@
 - **Coordinator** (VPS, public IP): `octopus coordinator start`. Runs a logos-delivery Core node (entry node and relay for NAT'd runners), receives GitHub webhooks, schedules jobs, keeps the job lifecycle and serves logs. Several coordinators run for failover.
 
 ## GitHub integration
-A GitHub App receives `workflow_job` webhooks (`queued`). The coordinator picks an idle runner, requests an ephemeral JIT runner config (`POST /repos/{o}/{r}/actions/runners/generate-jitconfig`, label `octopus`) and sends it over the encrypted job channel to that runner only. The runner starts `actions/runner --jitconfig`; it runs one job and exits. Workflows opt in with `runs-on: [self-hosted, octopus]`. Setup and webhook handling: [github-app.md](github-app.md).
+A GitHub App receives `workflow_job` webhooks (`queued`). The coordinator picks an idle runner, requests an ephemeral JIT runner config (`POST /repos/{o}/{r}/actions/runners/generate-jitconfig`, label `octopus`) and sends it over the encrypted job channel to that runner only. The runner starts `actions/runner --jitconfig`; it runs one job and exits. Workflows opt in with `runs-on: [self-hosted, octopus]`. Setup and webhook handling: [github-app.md](github-app.md). A single repo can instead be set up with a token and no App: [github-setup.md](github-setup.md).
 
 ## Trust policy
-Only trusted internal PRs: the repo or org is on the allowlist, the PR branch is in the same repo (no forks), the sender is an org member and the trigger is `push` or `pull_request` (`pull_request_target`, `workflow_run` and the like run with base-repo secrets and can check out attacker-controlled code). An empty allowlist rejects everything; names compare case-insensitively.
+Only trusted internal PRs: the repo or org is on the allowlist, the PR branch is in the same repo (no forks), the sender is an org member (with token auth, `octopus github setup`: has write access to the repo) and the trigger is `push` or `pull_request` (`pull_request_target`, `workflow_run` and the like run with base-repo secrets and can check out attacker-controlled code). An empty allowlist rejects everything; names compare case-insensitively.
 
 Enforced twice (`octopus.policy.TrustPolicy`):
 - **Coordinator**, before offering: `Scheduler.submit(..., context)` checks the job; a denied job (or one without a context) fails as `policy-rejected` with the reason in its timeline and is never offered.

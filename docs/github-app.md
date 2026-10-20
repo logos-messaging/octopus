@@ -5,6 +5,9 @@ a job that targets `runs-on: [self-hosted, octopus]` is queued, starts and compl
 same App's credentials are used to read the workflow run (trust checks) and, in later
 steps, to register ephemeral JIT runners.
 
+For a single repo there is a quicker path without an App: `octopus github setup` creates a
+repo webhook with a token ([github-setup.md](github-setup.md)).
+
 ## Create the App
 
 On the org (or user) that owns the repos: **Settings → Developer settings → GitHub Apps →
@@ -91,6 +94,8 @@ store to ignore repeated transitions.
   `issue_comment` run in the base repo but can check out fork code, so they are rejected.
 - **sender** and **org membership**: `GET /orgs/{org}/members/{sender}` (204 member, 404 not).
   For a repo owned by a user account only that user counts. Bots are never members.
+  With token auth (`TokenClient`) the sender must instead have write access to the repo
+  (`GET /repos/{o}/{r}/collaborators/{sender}/permission`); see [github-setup.md](github-setup.md).
 
 ## JIT runner configs and orphan cleanup
 

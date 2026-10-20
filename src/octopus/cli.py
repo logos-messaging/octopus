@@ -5,12 +5,14 @@ from pathlib import Path
 import typer
 
 from . import __version__
+from .cli_github import github_app
 
 app = typer.Typer(no_args_is_help=True, help="Octopus: lend your laptop as a CI runner.")
 runner_app = typer.Typer(no_args_is_help=True, help="Commands for runner hosts.")
 coordinator_app = typer.Typer(no_args_is_help=True, help="Commands for coordinator hosts.")
 app.add_typer(runner_app, name="runner")
 app.add_typer(coordinator_app, name="coordinator")
+app.add_typer(github_app, name="github")
 
 
 def _todo(what: str) -> None:

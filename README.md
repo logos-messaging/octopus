@@ -22,7 +22,8 @@ other over [logos-delivery](https://github.com/logos-messaging/logos-delivery)
 (`liblogosdelivery`, via the [Python bindings](https://github.com/logos-messaging/logos-delivery-python-bindings)).
 
 **Scope: trusted internal-team PRs only.** Octopus refuses fork PRs and senders who are
-not org members. It is not a public runner pool.
+not org members (or, for a repo set up with a token, cannot push to it). It is not a
+public runner pool.
 
 > Status: foundation only. The CLI commands are stubs; see the open issues for the plan.
 
@@ -34,6 +35,7 @@ octopus coordinator start|status          # on coordinator hosts (VPS)
 octopus jobs [--failed]                   # list jobs
 octopus logs <job> [-f]                   # job logs
 octopus explain <job>                     # timeline and why it failed
+octopus github setup|teardown             # one repo, token-based (docs/github-setup.md)
 ```
 
 ## Develop
@@ -71,10 +73,11 @@ Node mode: coordinators run `Core` (relay, public IP); runners on laptops can us
 - `src/octopus/transport/`: `Transport` interface, `LogosTransport` (logos-delivery), `MemoryTransport` (tests)
 - `src/octopus/proto/`: wire messages and content topics (`/octopus/1/...`)
 - `src/octopus/policy.py`: trust policy
-- `src/octopus/github/`: GitHub App auth, webhook verification and parsing, trust-policy inputs
+- `src/octopus/github/`: GitHub App and token auth, webhook verification and parsing, trust-policy inputs, repo setup
 - `src/octopus/coordinator/`: coordinator; so far the webhook HTTP endpoint
 - `src/octopus/agent/`: runner agent, to be implemented
 - `docs/architecture.md`: design; `docs/github-app.md`: GitHub App setup; `docs/issues/`: the issue specs
+- `docs/github-setup.md`: one-repo setup with a token (`octopus github setup`)
 
 ## License
 

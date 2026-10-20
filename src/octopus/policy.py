@@ -36,5 +36,5 @@ class TrustPolicy:
         if job.event not in self.allowed_events:
             return False, f"event not allowed: {job.event or '?'}"
         if not job.sender_is_org_member:
-            return False, "sender is not an org member"
+            return False, "sender is not trusted: not an org member or repo writer"
         return True, "ok"
