@@ -19,6 +19,7 @@ from typing import Protocol
 from pydantic import SecretStr
 
 from ..clock import Clock, SystemClock
+from ..policy import JobContext, TrustPolicy
 from ..proto import FailureReason, JobStatus, Presence
 from .jobs import IllegalTransition, JobStore, State, UnknownJob
 from .offers import OfferOutcome, OfferResult
@@ -54,6 +55,7 @@ class OfferSink(Protocol):
         jit_config: SecretStr,
         labels: list[str] | None = None,
         ttl_s: float = 30,
+        context: JobContext | None = None,
     ) -> OfferResult: ...
 
 
@@ -75,6 +77,7 @@ class PendingJob:
     repo: str
     labels: tuple[str, ...]
     enqueued_at: float
+    context: JobContext | None = None
     attempt: int = 0
     # Runners that already refused or missed this job: the next try prefers others.
     tried: set[str] = field(default_factory=set)
@@ -109,7 +112,9 @@ class Scheduler:
         clock: Clock | None = None,
         config: SchedulerConfig | None = None,
         executor: Executor | None = None,
+        policy: TrustPolicy | None = None,
     ) -> None:
+        self._policy = policy
         self._registry = registry
         self._store = store
         self._offers = offers
@@ -156,16 +161,34 @@ class Scheduler:
 
     # API
 
-    def submit(self, job_id: str, repo: str, labels: list[str] | tuple[str, ...] = ()) -> bool:
-        """Queue a job. A duplicate id (e.g. a repeated webhook) is ignored; returns False."""
+    def submit(
+        self,
+        job_id: str,
+        repo: str,
+        labels: list[str] | tuple[str, ...] = (),
+        context: JobContext | None = None,
+    ) -> bool:
+        """Queue a job. A duplicate id (e.g. a repeated webhook) is ignored; returns False.
+
+        With a trust policy configured, a job that fails it (or arrives without a context)
+        is failed as POLICY_REJECTED right away and never offered to a runner.
+        """
         try:
             self._store.create(job_id, repo, actor=ACTOR)
         except ValueError:
             return False
-        with self._lock:
-            self._pending[job_id] = PendingJob(
-                job_id, repo, tuple(labels), self._clock.monotonic()
+        job = PendingJob(job_id, repo, tuple(labels), self._clock.monotonic(), context)
+        if self._policy is not None:
+            ok, why = (
+                self._policy.check(context)
+                if context is not None
+                else (False, "no trust context for job")
             )
+            if not ok:
+                self._fail(job, FailureReason.POLICY_REJECTED, f"trust policy: {why}")
+                return True
+        with self._lock:
+            self._pending[job_id] = job
         return True
 
     def tick(self) -> None:
@@ -261,7 +284,13 @@ class Scheduler:
             return
         self._transition(job.job_id, State.OFFERED, detail=f"runner: {runner.runner_id}")
         result = self._offers.send_offer(
-            runner, job.job_id, job.repo, jit, list(job.labels), self._config.offer_ttl_s
+            runner,
+            job.job_id,
+            job.repo,
+            jit,
+            list(job.labels),
+            self._config.offer_ttl_s,
+            job.context,
         )
         if result.outcome is OfferOutcome.ACCEPTED:
             self._accepted(job, runner)
@@ -280,6 +309,8 @@ class Scheduler:
     def _refused(self, job: PendingJob, runner: Presence, result: OfferResult) -> None:
         reason = result.reason or FailureReason.OFFER_TIMEOUT
         detail = f"offer {result.outcome.value}: runner {runner.runner_id}"
+        if result.detail:
+            detail += f": {result.detail}"
         self._release(runner.runner_id, job.job_id)
         with self._lock:
             self._inflight.pop(job.job_id, None)

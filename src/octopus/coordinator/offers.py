@@ -12,6 +12,7 @@ from pydantic import SecretStr, ValidationError
 
 from ..clock import Clock, SystemClock
 from ..crypto import PairCipher, decode_public_key, derive_channel_key, encode_public_key, node_id
+from ..policy import JobContext
 from ..proto import (
     FailureReason,
     JobAck,
@@ -38,6 +39,7 @@ class OfferOutcome(str, Enum):
 class OfferResult:
     outcome: OfferOutcome
     reason: FailureReason | None = None
+    detail: str | None = None
 
 
 class OfferSender:
@@ -68,6 +70,7 @@ class OfferSender:
         jit_config: SecretStr,
         labels: list[str] | None = None,
         ttl_s: float = 30,
+        context: JobContext | None = None,
     ) -> OfferResult:
         if not runner.pubkey:
             return OfferResult(OfferOutcome.NO_KEY)
@@ -86,6 +89,15 @@ class OfferSender:
             offer_ttl_s=ttl_s,
             expires_at=self._clock.now() + ttl_s,
             nonce=secrets.token_hex(16),
+            **(
+                {
+                    "head_repo": context.head_repo,
+                    "event": context.event,
+                    "sender_is_org_member": context.sender_is_org_member,
+                }
+                if context is not None
+                else {}
+            ),
         )
         event = threading.Event()
         acks: list[JobAck] = []
@@ -110,7 +122,9 @@ class OfferSender:
         ack = acks[0]
         if ack.accepted:
             return OfferResult(OfferOutcome.ACCEPTED)
-        return OfferResult(OfferOutcome.REJECTED, ack.reason)
+        # The detail comes from the runner: bound it before it reaches the job timeline.
+        detail = ack.detail[:200] if ack.detail else None
+        return OfferResult(OfferOutcome.REJECTED, ack.reason, detail)
 
     def _ensure_channel(self, runner: Presence) -> str:
         channel_id = job_channel_id(self.coordinator_id, runner.runner_id)

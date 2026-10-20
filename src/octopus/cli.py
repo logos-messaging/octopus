@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import typer
 
 from . import __version__
@@ -56,10 +58,60 @@ def runner_status() -> None:
     _todo("runner status")
 
 
+ConfigOption = typer.Option(
+    None, "--config", help="Runner config file (default: the platform config dir)."
+)
+
+
+def _load_allowlist(config: Path | None):
+    from .agent.trust import Allowlist, default_config_path
+
+    path = config or default_config_path()
+    try:
+        return Allowlist.load(path), path
+    except ValueError as e:
+        typer.echo(f"error: {e}", err=True)
+        raise typer.Exit(code=1) from e
+
+
+def _edit_allowlist(config: Path | None, target: str, add: bool) -> None:
+    from .agent.trust import InvalidTarget
+
+    allowlist, path = _load_allowlist(config)
+    try:
+        changed = allowlist.add(target) if add else allowlist.remove(target)
+    except InvalidTarget as e:
+        typer.echo(f"error: {e}", err=True)
+        raise typer.Exit(code=2) from e
+    if changed:
+        allowlist.save(path)
+    verb = ("allowed", "already allowed") if add else ("denied", "was not allowed")
+    typer.echo(f"{target}: {verb[0] if changed else verb[1]}")
+
+
 @runner_app.command("allow")
-def runner_allow(repo_or_org: str) -> None:
+def runner_allow(repo_or_org: str, config: Path | None = ConfigOption) -> None:
     """Allow jobs from a repo (org/name) or an org."""
-    _todo("runner allow")
+    _edit_allowlist(config, repo_or_org, add=True)
+
+
+@runner_app.command("deny")
+def runner_deny(repo_or_org: str, config: Path | None = ConfigOption) -> None:
+    """Stop accepting jobs from a repo (org/name) or an org."""
+    _edit_allowlist(config, repo_or_org, add=False)
+
+
+@runner_app.command("list")
+def runner_list(config: Path | None = ConfigOption) -> None:
+    """Show what this runner is allowed to run."""
+    allowlist, _ = _load_allowlist(config)
+    if not allowlist.orgs and not allowlist.repos:
+        typer.echo("nothing allowed yet: this runner rejects every job (see: octopus runner allow)")
+        return
+    for org in sorted(allowlist.orgs):
+        typer.echo(f"org   {org}")
+    for repo in sorted(allowlist.repos):
+        typer.echo(f"repo  {repo}")
 
 
 @coordinator_app.command("start")

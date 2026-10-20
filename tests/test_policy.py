@@ -28,6 +28,16 @@ def test_non_member_rejected():
     assert not POLICY.check(job(member=False))[0]
 
 
+def test_names_are_case_insensitive():
+    assert POLICY.check(job(repo="Acme/App", head="acme/APP"))[0]
+    assert POLICY.check(job(repo="ACME-Labs/X", head="acme-labs/x"))[0]
+
+
+def test_empty_allowlist_rejects_everything():
+    ok, reason = TrustPolicy().check(job())
+    assert not ok and "not allowed" in reason
+
+
 def test_push_and_pull_request_allowed():
     assert POLICY.check(job(event="push"))[0]
     assert POLICY.check(job(event="pull_request"))[0]
@@ -37,3 +47,11 @@ def test_unsafe_events_rejected():
     for event in ("pull_request_target", "workflow_run", "issue_comment", ""):
         ok, reason = POLICY.check(job(event=event))
         assert not ok and "event" in reason
+
+
+def test_allowed_events_are_configurable():
+    relaxed = TrustPolicy(
+        allowed_repos=frozenset({"acme/app"}), allowed_events=frozenset({"pull_request_target"})
+    )
+    assert relaxed.check(job(event="pull_request_target"))[0]
+    assert not relaxed.check(job(event="push"))[0]

@@ -218,3 +218,58 @@ def test_jit_config_serialises_for_the_wire():
     offer = JobOffer(job_id="j", repo="r", jit_config=SecretStr(SECRET))
     assert SECRET in offer.model_dump_json()
     assert SECRET not in repr(offer)
+
+
+# runner-side trust enforcement
+
+from octopus.agent import Allowlist, make_offer_handler
+from octopus.policy import JobContext
+
+GOOD = JobContext(
+    repo="acme/app", head_repo="acme/app", sender_is_org_member=True, event="pull_request"
+)
+
+
+def _trusting_world(allowlist, started):
+    return World(handler=make_offer_handler(allowlist, lambda offer: started.append(offer)))
+
+
+def _send(w, repo="acme/app", context=GOOD):
+    return w.sender.send_offer(
+        w.runner, "j1", repo, SecretStr(SECRET), ttl_s=1, context=context
+    )
+
+
+def test_forged_offer_for_non_allowed_repo_is_rejected_by_the_runner():
+    started = []
+    w = _trusting_world(Allowlist(repos={"acme/other"}), started)
+    result = _send(w)  # a coordinator that skipped its own check, or a compromised one
+    assert result.outcome is OfferOutcome.REJECTED
+    assert result.reason is FailureReason.POLICY_REJECTED
+    assert "repo not allowed: acme/app" in result.detail
+    assert started == []
+
+
+def test_allowed_repo_is_accepted_and_started():
+    started = []
+    w = _trusting_world(Allowlist(repos={"acme/app"}), started)
+    assert _send(w).outcome is OfferOutcome.ACCEPTED
+    assert [o.job_id for o in started] == ["j1"]
+
+
+def test_offer_without_trust_facts_fails_closed():
+    started = []
+    w = _trusting_world(Allowlist(repos={"acme/app"}), started)
+    result = _send(w, context=None)
+    assert result.outcome is OfferOutcome.REJECTED and started == []
+
+
+def test_fork_and_dangerous_event_rejected_by_the_runner():
+    started = []
+    w = _trusting_world(Allowlist(orgs={"acme"}), started)
+    fork = JobContext("acme/app", "stranger/app", True, "pull_request")
+    assert _send(w, context=fork).outcome is OfferOutcome.REJECTED
+    prt = JobContext("acme/app", "acme/app", True, "pull_request_target")
+    result = w.sender.send_offer(w.runner, "j2", "acme/app", SecretStr(SECRET), ttl_s=1, context=prt)
+    assert result.outcome is OfferOutcome.REJECTED and "event not allowed" in result.detail
+    assert started == []
