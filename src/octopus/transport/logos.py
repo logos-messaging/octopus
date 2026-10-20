@@ -158,7 +158,7 @@ class LogosTransport(ChannelTransport):
             self._node = self._create_node()
             self._refresh_status()
 
-    def __enter__(self) -> LogosTransport:
+    def __enter__(self) -> LogosTransport:  # noqa: PYI034 (typing.Self needs Python 3.11)
         self.start()
         return self
 

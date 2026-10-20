@@ -3,12 +3,12 @@ import json
 import sys
 import threading
 import types
+from typing import ClassVar
 
 import pytest
 
 from octopus.transport import logos
 from octopus.transport.logos import LogosConfig, LogosLibraryError, LogosTransport
-
 
 _real_load = logos._load_bindings
 
@@ -27,7 +27,7 @@ class Res:
 
 
 class FakeNode:
-    instances: list = []
+    instances: ClassVar[list] = []
 
     def __init__(self, config, event_cb):
         self.config, self.event_cb = config, event_cb

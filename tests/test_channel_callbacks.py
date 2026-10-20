@@ -40,5 +40,5 @@ def test_callback_addresses_are_distinct_per_direction():
 
 
 def test_ciphertext_has_no_trailing_byte():
-    rc, ct = _call(_channel(), "_enc", b"hello")
+    _, ct = _call(_channel(), "_enc", b"hello")
     assert len(ct) == 12 + len(b"hello") + 16
