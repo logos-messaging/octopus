@@ -89,14 +89,23 @@ def test_settings_path_is_next_to_allowlist(tmp_path):
 
 
 class FakeManager:
-    def __init__(self, gate: threading.Event | None = None, result: RunResult | None = None):
+    def __init__(
+        self,
+        gate: threading.Event | None = None,
+        result: RunResult | None = None,
+        output: list[str] | None = None,
+    ):
         self.gate = gate
+        self.output = output or []
         self.result = result or RunResult(0, None, "", 0.1)
         self.jobs: list[tuple[str, str]] = []
         self.stopped = False
 
     def run_job(self, job_id, jit_config, on_output=None):
         self.jobs.append((job_id, jit_config))
+        for line in self.output:
+            if on_output is not None:
+                on_output(line)
         if self.gate is not None:
             self.gate.wait(5)
         return self.result
@@ -108,7 +117,9 @@ class FakeManager:
 
 
 class World:
-    def __init__(self, tmp_path, *, max_jobs=1, allow=("acme/app",), manager=None):
+    def __init__(
+        self, tmp_path, *, max_jobs=1, allow=("acme/app",), manager=None, log_drain_s=0.0
+    ):
         self.bus = MemoryBus()
         self.coord_key = generate_private_key()
         self.statuses: list[JobStatus] = []
@@ -133,6 +144,7 @@ class World:
             MemoryTransport(self.bus),
             data_dir=tmp_path / "data",
             manager_factory=factory,
+            log_drain_s=log_drain_s,  # no collector here unless a test adds one
         )
         self.agent.start()
         key = self.agent._receiver._key
@@ -312,3 +324,84 @@ def test_start_reports_missing_library(env, monkeypatch):
     r = cli.invoke(app, ["runner", "start", "--config", str(cfg)])
     assert r.exit_code == 4
     assert "liblogosdelivery" in r.output
+
+
+# job logs
+
+
+def watch_logs(w, job_id="j1"):
+    """What the scheduler does before an offer: the coordinator listens for the job's log."""
+    from octopus.coordinator import LogCollector, LogStore
+
+    store = LogStore()
+    collector = LogCollector(MemoryTransport(w.bus), w.coord_key, store)
+    collector.watch(job_id, w.presence)
+    return store
+
+
+def log_text(store, job_id="j1"):
+    return "".join(c.data for c in store.read(job_id))
+
+
+def test_agent_streams_job_output_to_the_coordinator(tmp_path):
+    output = [
+        "2026-10-20 10:00:00Z: Running job: build",
+        f"token {SECRET} should never leave",
+        "2026-10-20 10:00:09Z: Job build completed with result: Succeeded",
+    ]
+    w = World(tmp_path, manager=FakeManager(output=output), log_drain_s=5)
+    store = watch_logs(w)
+    assert w.offer().outcome is OfferOutcome.ACCEPTED
+    assert wait_for(lambda: (st := store.state("j1")) is not None and st.complete)
+    text = log_text(store)
+    assert SECRET not in text
+    assert text.splitlines() == [output[0], "token *** should never leave", output[2]]
+    assert all(SECRET.encode() not in frame for frame in w.bus.wire)
+    w.agent.stop()
+
+
+def test_runner_markers_become_step_statuses(tmp_path):
+    output = ["2026-10-20 10:00:00Z: Running job: build", "compiling"]
+    w = World(tmp_path, manager=FakeManager(output=output), log_drain_s=5)
+    watch_logs(w)
+    w.offer()
+    assert wait_for(lambda: any(s.state == "finished" for s in w.statuses))
+    assert [(s.state, s.step) for s in w.statuses] == [
+        ("runner-started", None),
+        ("step", "build"),
+        ("finished", None),
+    ]
+    w.agent.stop()
+
+
+def test_slot_is_freed_before_the_log_drains(tmp_path):
+    w = World(tmp_path, manager=FakeManager(output=["x"]), log_drain_s=2)
+    # Nobody collects this log, so the drain runs to its limit.
+    w.offer()
+    assert wait_for(lambda: any(s.state == "finished" for s in w.statuses), timeout=1)
+    assert w.agent.busy == 0
+    assert any(t.is_alive() for t in w.agent._workers)  # still draining
+    w.agent.stop()
+
+
+def test_job_runs_without_logs_if_the_stream_cannot_open(tmp_path, monkeypatch):
+    from octopus.agent import logs
+
+    def broken(self, background=True):
+        raise RuntimeError("could not open channel")
+
+    monkeypatch.setattr(logs.LogStreamer, "start", broken)
+    w = World(tmp_path, manager=FakeManager(output=["x"]))
+    w.offer()
+    assert wait_for(lambda: any(s.state == "finished" for s in w.statuses))
+    assert w.statuses[-1].reason is None
+    w.agent.stop()
+
+
+def test_leftover_spools_are_removed_on_start(tmp_path):
+    spool = tmp_path / "data" / "logs" / "log-old-abc.spool"
+    spool.parent.mkdir(parents=True)
+    spool.write_text("masked output from a crashed run")
+    w = World(tmp_path)
+    assert not spool.exists()
+    w.agent.stop()

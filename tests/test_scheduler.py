@@ -511,3 +511,23 @@ def test_a_failing_log_sink_does_not_block_the_job():
     env.scheduler.submit("j1", "acme/app")
     env.scheduler.tick()
     assert env.state("j1") is State.ACKED
+
+
+def test_cancel_drops_a_waiting_job():
+    env = Env()
+    env.scheduler.submit("j1", "acme/app")
+    assert env.scheduler.cancel("j1", "GitHub completed the job before it ran: cancelled")
+    assert env.state("j1") is State.FAILED
+    assert env.store.get("j1").reason is FailureReason.CANCELLED
+    env.registry.add("r1")
+    env.scheduler.tick()
+    assert env.offers.calls == []
+
+
+def test_cancel_leaves_a_running_job_alone():
+    env = Env()
+    env.registry.add("r1")
+    env.scheduler.submit("j1", "acme/app")
+    env.scheduler.tick()
+    assert not env.scheduler.cancel("j1", "too late")
+    assert env.state("j1") is State.ACKED

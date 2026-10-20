@@ -211,6 +211,18 @@ class Scheduler:
             self._pending[job_id] = job
         return True
 
+    def cancel(self, job_id: str, detail: str) -> bool:
+        """Drop a job that is still waiting for a runner and fail it as CANCELLED.
+
+        A job already being offered or running is left alone: GitHub stops it on the runner.
+        """
+        with self._lock:  # popped under the lock, so tick() can no longer pick it
+            job = self._pending.pop(job_id, None)
+        if job is None:
+            return False
+        self._transition(job_id, State.FAILED, detail=detail, reason=FailureReason.CANCELLED)
+        return True
+
     def tick(self) -> None:
         """One scheduling pass: detect lost runners, expire waiting jobs, start offers."""
         self._requeue_lost_runners()

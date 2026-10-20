@@ -197,6 +197,7 @@ class RunnerNode:
             transport,
             data_dir=self.data_dir,
             manager_factory=lambda: FakeManager(self),
+            log_drain_s=1.0,
         )
         self.agent.start()
 

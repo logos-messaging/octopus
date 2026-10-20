@@ -30,6 +30,16 @@ CREATE INDEX IF NOT EXISTS jobs_updated ON jobs(updated_at);
 """
 
 
+def _connect(path: str, readonly: bool) -> sqlite3.Connection:
+    if readonly:
+        # Raises sqlite3.OperationalError if the file does not exist.
+        db = sqlite3.connect(f"file:{path}?mode=ro", uri=True, check_same_thread=False)
+    else:
+        db = sqlite3.connect(path, check_same_thread=False)
+    db.row_factory = sqlite3.Row
+    return db
+
+
 def _job(row: sqlite3.Row) -> Job:
     return Job(
         id=row["id"],
@@ -50,12 +60,16 @@ class SqliteJobStore(JobStore):
         *,
         clock: Callable[[], float] = time.time,
         retention_s: float = DEFAULT_RETENTION_S,
+        readonly: bool = False,
     ) -> None:
+        """`readonly` opens an existing database for inspection (`octopus jobs`): no schema
+        changes, no purge, and the running coordinator keeps writing alongside."""
         self._clock = clock
         self._retention_s = retention_s
         self._lock = threading.RLock()
-        self._db = sqlite3.connect(path, check_same_thread=False)
-        self._db.row_factory = sqlite3.Row
+        self._db = _connect(path, readonly)
+        if readonly:
+            return
         with self._lock:
             if path != ":memory:":
                 self._db.execute("PRAGMA journal_mode=WAL")
@@ -144,6 +158,12 @@ class SqliteJobStore(JobStore):
         with self._lock:
             rows = self._db.execute(sql, (*args, limit)).fetchall()
         return [_job(r) for r in rows]
+
+    def counts(self) -> dict[str, int]:
+        """How many jobs are in each state."""
+        with self._lock:
+            rows = self._db.execute("SELECT state, COUNT(*) FROM jobs GROUP BY state").fetchall()
+        return {r[0]: r[1] for r in rows}
 
     def timeline(self, job_id: str) -> list[Event]:
         with self._lock:
