@@ -1,0 +1,33 @@
+name: Bump bindings
+
+# The bindings pin the logos-delivery commit that liblogosdelivery is built from.
+# Moving the pin in its own PR lets ci.yml show whether Octopus still works.
+on:
+  schedule:
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Move the bindings submodule to the latest commit
+        run: git submodule update --remote vendor/logos-delivery-python-bindings
+
+      - uses: peter-evans/create-pull-request@v7
+        with:
+          branch: chore/bump-bindings
+          commit-message: "chore: bump logos-delivery-python-bindings"
+          title: "chore: bump logos-delivery-python-bindings"
+          body: |
+            Automated bump of `vendor/logos-delivery-python-bindings` to its latest commit.
+            CI shows whether the new library still passes the `needs_lib` tests.
+          milestone: 1

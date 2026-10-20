@@ -1,3 +1,5 @@
+import sys
+
 import pytest
 
 from octopus.crypto import (
@@ -76,6 +78,7 @@ def test_bad_public_key_rejected_without_echoing_it():
     assert "not-a-key" not in str(exc.value)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes; Windows uses ACLs")
 def test_key_file_is_private_and_stable(tmp_path):
     path = tmp_path / "sub" / "key"
     k1 = load_or_create_private_key(path)

@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 import threading
 
 import pytest
@@ -37,11 +38,17 @@ def env(tmp_path, monkeypatch):
 # config
 
 
-def test_config_round_trip_and_permissions(tmp_path):
+def test_config_round_trip(tmp_path):
     path = tmp_path / "s.json"
     cfg = RunnerConfig(coordinators=[pubkey()], labels=["gpu"], max_jobs=2)
     cfg.save(path)
     assert RunnerConfig.load(path) == cfg
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes; Windows uses ACLs")
+def test_config_permissions(tmp_path):
+    path = tmp_path / "s.json"
+    RunnerConfig(coordinators=[pubkey()]).save(path)
     assert oct(path.stat().st_mode & 0o777) == "0o600"
 
 

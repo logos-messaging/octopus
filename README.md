@@ -86,6 +86,20 @@ If the library is missing, `LogosTransport.start()` fails with an error naming t
 Node mode: coordinators run `Core` (relay, public IP); runners on laptops can use `Edge`
 (light client) and point `entry_nodes` at the coordinators (see `LogosConfig`).
 
+## CI
+
+| Job | OS | Runs |
+|---|---|---|
+| `lint` | Linux | `ruff check .` |
+| `test` | Linux (Python 3.10 to 3.14), macOS and Windows (3.10, 3.14) | `pytest` (unit tests, without `needs_lib`) |
+| `needs_lib` | Linux, macOS | builds `liblogosdelivery` from the logos-delivery commit pinned by the bindings (cached per commit), then `pytest -m needs_lib` |
+
+Windows runs unit tests only: the bindings load `lib/liblogosdelivery.so`, so the library tests
+need Windows support in the bindings first. A weekly job (`bump-bindings.yml`) opens a PR that
+moves the bindings pin, so CI shows whether a new logos-delivery still works with Octopus.
+
+Run the same checks locally with `ruff check . && pytest`.
+
 ## Layout
 
 - `src/octopus/transport/`: `Transport` interface, `LogosTransport` (logos-delivery), `MemoryTransport` (tests)
