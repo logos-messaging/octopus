@@ -7,6 +7,7 @@ import typer
 
 from . import __version__
 from .cli_github import github_app
+from .cli_keys import add_coordinator_keygen, root_app
 
 app = typer.Typer(no_args_is_help=True, help="Octopus: lend your laptop as a CI runner.")
 runner_app = typer.Typer(no_args_is_help=True, help="Commands for runner hosts.")
@@ -14,6 +15,8 @@ coordinator_app = typer.Typer(no_args_is_help=True, help="Commands for coordinat
 app.add_typer(runner_app, name="runner")
 app.add_typer(coordinator_app, name="coordinator")
 app.add_typer(github_app, name="github")
+app.add_typer(root_app, name="root")
+add_coordinator_keygen(coordinator_app)
 
 
 @app.command()
@@ -190,6 +193,11 @@ CoordinatorOption = typer.Option(
     "--coordinator",
     help="Public key of a coordinator to trust (repeatable). Printed by the coordinator.",
 )
+RootKeyOption = typer.Option(
+    None,
+    "--root-key",
+    help="Pinned root public key: discover the coordinators it authorises (or set OCTOPUS_ROOT_KEY).",
+)
 LabelsOption = typer.Option(None, "--labels", help="Extra runner labels (repeatable).")
 MaxJobsOption = typer.Option(None, "--max-jobs", min=1, help="Jobs to run at the same time.")
 
@@ -205,6 +213,7 @@ def _resolve_settings(
     coordinators: list[str] | None,
     labels: list[str] | None,
     max_jobs: int | None,
+    root_key: str | None = None,
 ):
     from .agent.config import ConfigError, RunnerConfig, settings_path
     from .agent.trust import default_config_path
@@ -218,6 +227,7 @@ def _resolve_settings(
             coordinators=coordinators or (),
             labels=labels or (),
             max_jobs=max_jobs,
+            root_key=root_key,
         )
     except ConfigError as e:
         raise _fail(str(e), EXIT_BAD_CONFIG) from e
@@ -231,19 +241,20 @@ def runner_setup(
     coordinator: list[str] | None = CoordinatorOption,
     labels: list[str] | None = LabelsOption,
     max_jobs: int | None = MaxJobsOption,
+    root_key: str | None = RootKeyOption,
 ) -> None:
     """Save this runner's settings (entry nodes, trusted coordinators, labels, max jobs)."""
     from .agent.config import ConfigError
 
-    settings, path = _resolve_settings(config, entry_node, coordinator, labels, max_jobs)
+    settings, path = _resolve_settings(config, entry_node, coordinator, labels, max_jobs, root_key)
     try:
         settings.save(path)
     except ConfigError as e:
         raise _fail(str(e), EXIT_BAD_CONFIG) from e
     typer.echo(f"saved settings: {path}")
-    if not settings.coordinators:
+    if not settings.coordinators and not settings.root_key:
         typer.echo(
-            "note: no coordinator trusted yet; add one with: octopus runner setup --coordinator <key>"
+            "note: no coordinator trusted yet; add one with: octopus runner setup --coordinator <key> or --root-key <key>"
         )
 
 
@@ -254,6 +265,7 @@ def runner_start(
     coordinator: list[str] | None = CoordinatorOption,
     labels: list[str] | None = LabelsOption,
     max_jobs: int | None = MaxJobsOption,
+    root_key: str | None = RootKeyOption,
     allow_empty: bool = typer.Option(
         False, "--allow-empty", help="Start even if nothing is allowed (rejects every job)."
     ),
@@ -264,11 +276,11 @@ def runner_start(
     from .agent.runner_agent import RunnerAgent, read_state
     from .transport.logos import LogosError, LogosLibraryError, LogosTransport
 
-    settings, _ = _resolve_settings(config, entry_node, coordinator, labels, max_jobs)
+    settings, _ = _resolve_settings(config, entry_node, coordinator, labels, max_jobs, root_key)
     allowlist, _ = _load_allowlist(config)
-    if not settings.coordinators:
+    if not settings.coordinators and not settings.root_key:
         raise _fail(
-            "no trusted coordinator: run: octopus runner setup --coordinator <key>",
+            "no trusted coordinator: run: octopus runner setup --coordinator <key> or --root-key <key>",
             EXIT_BAD_CONFIG,
         )
     if not allowlist.orgs and not allowlist.repos and not allow_empty:

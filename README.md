@@ -26,7 +26,8 @@ not org members (or, for a repo set up with a token, cannot push to it). It is n
 public runner pool.
 
 > Status: early. Runner and coordinator run end to end in tests; not yet tried against a real
-> GitHub runner and network. See the open issues for the plan.
+> GitHub runner and network. See the open issues and the MVP milestone for the plan.
+> Read the [threat model](docs/threat-model.md) before lending a machine.
 
 ## One CLI, two roles
 
@@ -111,6 +112,8 @@ Node mode: coordinators run `Core` (relay, public IP); runners on laptops can us
 - `src/octopus/agent/`: runner agent (config, presence, offers, trust, runner manager)
 - `docs/architecture.md`: design; `docs/github-app.md`: GitHub App setup; `docs/issues/`: the issue specs
 - `docs/github-setup.md`: one-repo setup with a token (`octopus github setup`)
+- `docs/coordinator-ops.md`: running a coordinator in production (Docker/systemd, TLS, metrics, rotation); `deploy/` has the files
+- `docs/threat-model.md`: what Octopus protects against and what it does not; `CONTRIBUTING.md`: how to contribute
 
 ## License
 

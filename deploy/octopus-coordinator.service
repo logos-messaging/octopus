@@ -1,0 +1,51 @@
+# Octopus coordinator, installed from a virtualenv at /opt/octopus (see docs/coordinator-ops.md).
+#
+#   install -m 0644 deploy/octopus-coordinator.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now octopus-coordinator
+[Unit]
+Description=Octopus coordinator
+Documentation=https://github.com/logos-messaging/octopus/blob/main/docs/coordinator-ops.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=octopus
+Group=octopus
+
+# Settings and secrets. Keep the file root:octopus 0640; it is never logged.
+EnvironmentFile=/etc/octopus/coordinator.env
+# App mode: set OCTOPUS_GITHUB_APP_KEY_FILE=/etc/octopus/app-key.pem in the env file and keep the
+# key root:octopus 0640.
+Environment=OCTOPUS_METRICS_LISTEN=127.0.0.1:9100
+
+# State (node key, jobs.db, logs.db) lives in /var/lib/octopus, owned by the service user.
+StateDirectory=octopus
+Environment=OCTOPUS_DATA_DIR=/var/lib/octopus
+
+ExecStart=/opt/octopus/venv/bin/octopus coordinator start
+Restart=on-failure
+RestartSec=5
+# Exit codes 2 (usage) and 3 (bad settings) will not fix themselves: stop instead of looping.
+RestartPreventExitStatus=2 3
+TimeoutStopSec=30
+LimitNOFILE=65536
+
+# Hardening. MemoryDenyWriteExecute is left off on purpose: cffi needs executable memory.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

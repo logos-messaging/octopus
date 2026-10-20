@@ -13,7 +13,8 @@ from pathlib import Path
 
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
-from ..crypto import encode_public_key, load_or_create_private_key
+from ..crypto import decode_signing_public, encode_public_key, load_or_create_private_key
+from ..discovery import CoordinatorDirectory
 from ..proto import FailureReason, JobOffer, JobStatus
 from ..transport import ChannelTransport
 from .config import RunnerConfig
@@ -96,6 +97,7 @@ class RunnerAgent:
         self._started_at = 0.0
         self._receiver: OfferReceiver | None = None
         self._presence: PresencePublisher | None = None
+        self._directory: CoordinatorDirectory | None = None
         self.runner_id = ""
 
     def start(self) -> None:
@@ -123,6 +125,13 @@ class RunnerAgent:
         )
         self._receiver, self._presence = receiver, presence
         receiver.start()
+        if self._config.root_key:
+            self._directory = CoordinatorDirectory(
+                self._transport,
+                decode_signing_public(self._config.root_key),
+                on_coordinator=receiver.add_coordinator,
+            )
+            self._directory.start()
         presence.start()
         self._started_at = time.time()
         self._write_state()
@@ -141,6 +150,8 @@ class RunnerAgent:
             manager.stop()
         for worker in workers:
             worker.join(timeout=30)
+        if self._directory is not None:
+            self._directory.stop()
         if self._presence is not None:
             self._presence.stop()
         if self._receiver is not None:

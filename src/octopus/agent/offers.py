@@ -16,6 +16,7 @@ from ..transport import ChannelTransport
 
 log = logging.getLogger(__name__)
 
+
 @dataclass(frozen=True)
 class Rejection:
     reason: FailureReason
@@ -48,31 +49,53 @@ class OfferReceiver:
         self._coordinators: dict[str, str] = {}
         for coordinator_id, pubkey in trusted_coordinators.items():
             if node_id(decode_public_key(pubkey)) != coordinator_id:
-                raise ValueError(f"could not trust coordinator: id does not match key: {coordinator_id}")
+                raise ValueError(
+                    f"could not trust coordinator: id does not match key: {coordinator_id}"
+                )
             self._coordinators[coordinator_id] = pubkey
         self._lock = threading.Lock()
+        self._trust_lock = threading.Lock()
+        self._started = False
         self._seen: OrderedDict[tuple[str, str], None] = OrderedDict()
         self._channels: dict[str, str] = {}  # channel_id -> coordinator_id
 
     def start(self) -> None:
-        for coordinator_id, pubkey in self._coordinators.items():
-            channel_id = job_channel_id(coordinator_id, self.runner_id)
-            cipher = PairCipher(
-                derive_channel_key(self._key, decode_public_key(pubkey), channel_id)
+        with self._trust_lock:
+            self._started = True
+            for coordinator_id, pubkey in self._coordinators.items():
+                self._open(coordinator_id, pubkey)
+
+    def add_coordinator(self, coordinator_id: str, pubkey: str) -> None:
+        """Trust a coordinator learned after construction (e.g. from a verified advert)."""
+        if node_id(decode_public_key(pubkey)) != coordinator_id:
+            raise ValueError(
+                f"could not trust coordinator: id does not match key: {coordinator_id}"
             )
-            self._channels[channel_id] = coordinator_id
-            self._transport.open_channel(
-                channel_id,
-                jobs_topic(self.runner_id),
-                self.runner_id,
-                cipher,
-                lambda sender, payload, cid=channel_id: self._on_message(cid, payload),
-            )
+        with self._trust_lock:
+            if self._coordinators.get(coordinator_id) == pubkey:
+                return
+            self._coordinators[coordinator_id] = pubkey
+            if self._started:
+                self._open(coordinator_id, pubkey)
+
+    def _open(self, coordinator_id: str, pubkey: str) -> None:
+        channel_id = job_channel_id(coordinator_id, self.runner_id)
+        cipher = PairCipher(derive_channel_key(self._key, decode_public_key(pubkey), channel_id))
+        self._channels[channel_id] = coordinator_id
+        self._transport.open_channel(
+            channel_id,
+            jobs_topic(self.runner_id),
+            self.runner_id,
+            cipher,
+            lambda sender, payload, cid=channel_id: self._on_message(cid, payload),
+        )
 
     def stop(self) -> None:
-        for channel_id in self._channels:
-            self._transport.close_channel(channel_id)
-        self._channels.clear()
+        with self._trust_lock:
+            self._started = False
+            for channel_id in self._channels:
+                self._transport.close_channel(channel_id)
+            self._channels.clear()
 
     def send_status(self, coordinator_id: str, status: JobStatus) -> None:
         channel_id = job_channel_id(coordinator_id, self.runner_id)
