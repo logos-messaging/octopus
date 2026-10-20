@@ -33,6 +33,27 @@ def _logos_shutdown():
         ld.shutdown()
 
 
+def pytest_sessionfinish(session, exitstatus):
+    session.config._octopus_exitstatus = int(exitstatus)
+
+
+def pytest_unconfigure(config):
+    """Skip interpreter finalization once liblogosdelivery has been loaded.
+
+    On Linux the library segfaults while the process exits (exit code 139), after every test
+    passed and the nodes were shut down. The reports are already printed here, so leave with
+    the real status instead of letting the crash replace it.
+    """
+    import os
+    import sys
+
+    status = getattr(config, "_octopus_exitstatus", None)
+    if status is not None and "logosdelivery" in sys.modules:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(status)
+
+
 @pytest.fixture(scope="session")
 def rsa_key_pem() -> bytes:
     from cryptography.hazmat.primitives import serialization
