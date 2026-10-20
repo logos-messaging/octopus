@@ -34,7 +34,7 @@ Offers travel over a logos-delivery reliable channel (SDS) with a per-channel ci
 
 - Each node has an X25519 key (`octopus.crypto`). Its id is derived from the public key (`node_id`), so a forged presence cannot claim another runner's id; the registry drops presences whose id does not match their `pubkey`.
 - The channel key is `HKDF(X25519(own, peer), info = channel_id)`; the cipher is ChaCha20-Poly1305 with a random nonce per segment (`nonce || ct || tag`), because the library decrypts each segment on its own. Only the two key holders can encrypt or decrypt, so it also authenticates the coordinator to the runner. A message that fails to decrypt is dropped.
-- A runner accepts offers only from coordinators it was told to trust (`id -> public key`, id must match the key). Distribution of those keys is #38.
+- A runner accepts offers only from coordinators it was told to trust (`id -> public key`, id must match the key). They are learned from signed coordinator adverts authorised by a pinned root key (`docs/networking.md`), or listed explicitly with `--coordinator`.
 - The channel confirms delivery; `JobAck` carries accept/reject and the `FailureReason`. `expires_at` and a per-offer `nonce` give expiry and replay protection (the cipher gives no freshness).
 - The cipher callbacks are cffi function pointers called inline on the library event loop: they only transform bytes and never log.
 

@@ -1,3 +1,4 @@
+from .adverts import COORDINATORS_TOPIC, Advert, CoordinatorCert
 from .channels import job_channel_id, log_channel_id
 from .messages import (
     COORD_TOPIC,
@@ -15,9 +16,12 @@ from .messages import (
 )
 
 __all__ = [
+    "COORDINATORS_TOPIC",
     "COORD_TOPIC",
     "MAX_LOG_CHUNK_BYTES",
     "PRESENCE_TOPIC",
+    "Advert",
+    "CoordinatorCert",
     "FailureReason",
     "JobAck",
     "JobOffer",

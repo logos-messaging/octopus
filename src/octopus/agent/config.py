@@ -7,11 +7,12 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ..crypto import KeyMaterialError, decode_public_key, node_id
+from ..crypto import KeyMaterialError, decode_public_key, decode_signing_public, node_id
 from ..transport.config import (
     DEFAULT_TCP_PORT,
     ENTRY_NODES_ENV,
     NAT_ENV,
+    ROOT_KEY_ENV,
     TCP_PORT_ENV,
     runner_config,
 )
@@ -40,6 +41,8 @@ class RunnerConfig:
     entry_nodes: list[str] = field(default_factory=list)
     # coordinator public keys: a coordinator's id is derived from its key
     coordinators: list[str] = field(default_factory=list)
+    # Pinned root key (Ed25519, base64url): coordinators it authorises are discovered from adverts.
+    root_key: str | None = None
     labels: list[str] = field(default_factory=list)
     max_jobs: int = 1
     tcp_port: int = DEFAULT_TCP_PORT
@@ -52,6 +55,11 @@ class RunnerConfig:
             raise ConfigError(f"invalid tcp_port, expected 1-65535: {self.tcp_port}")
         for pubkey in self.coordinators:
             coordinator_id(pubkey)
+        if self.root_key is not None:
+            try:
+                decode_signing_public(self.root_key)
+            except KeyMaterialError as e:
+                raise ConfigError(f"could not parse root key: {e}") from e
 
     def trusted_coordinators(self) -> dict[str, str]:
         return {coordinator_id(k): k for k in self.coordinators}
@@ -102,6 +110,7 @@ class RunnerConfig:
         coordinators: Sequence[str] = (),
         labels: Sequence[str] = (),
         max_jobs: int | None = None,
+        root_key: str | None = None,
     ) -> RunnerConfig:
         """Precedence: flags over environment over the saved file."""
         env_nodes = [n.strip() for n in env.get(ENTRY_NODES_ENV, "").split(",") if n.strip()]
@@ -112,6 +121,7 @@ class RunnerConfig:
         merged = RunnerConfig(
             entry_nodes=list(entry_nodes) or env_nodes or list(self.entry_nodes),
             coordinators=list(coordinators) or list(self.coordinators),
+            root_key=root_key or env.get(ROOT_KEY_ENV) or self.root_key,
             labels=list(labels) or list(self.labels),
             max_jobs=max_jobs if max_jobs is not None else self.max_jobs,
             tcp_port=port,
