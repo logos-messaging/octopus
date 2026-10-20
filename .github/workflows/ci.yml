@@ -80,7 +80,9 @@ jobs:
         id: libcache
         uses: actions/cache@v4
         with:
-          path: vendor/logos-delivery-python-bindings/vendor/logos-delivery/build/liblogosdelivery.*
+          path: |
+            vendor/logos-delivery-python-bindings/vendor/logos-delivery/build/liblogosdelivery.so
+            vendor/logos-delivery-python-bindings/vendor/logos-delivery/build/liblogosdelivery.dylib
           key: liblogosdelivery-${{ runner.os }}-${{ runner.arch }}-${{ steps.pin.outputs.sha }}
 
       # Only the long part (Nim, nimble deps, compile) is skipped on a cache hit.
@@ -95,7 +97,9 @@ jobs:
         working-directory: vendor/logos-delivery-python-bindings
         run: |
           mkdir -p lib
-          cp vendor/logos-delivery/build/liblogosdelivery.* lib/
+          for f in vendor/logos-delivery/build/liblogosdelivery.so vendor/logos-delivery/build/liblogosdelivery.dylib; do
+            if [ -f "$f" ]; then cp "$f" lib/; fi
+          done
           if [ -f lib/liblogosdelivery.dylib ]; then ln -sf liblogosdelivery.dylib lib/liblogosdelivery.so; fi
           ls -l lib
 
