@@ -33,6 +33,30 @@ def _logos_shutdown():
         ld.shutdown()
 
 
+_run = {"status": 0, "needs_lib": False}
+
+
+def pytest_sessionfinish(session, exitstatus):
+    _run["status"] = int(exitstatus)
+    _run["needs_lib"] = any(item.get_closest_marker("needs_lib") for item in session.items)
+
+
+def pytest_unconfigure(config):
+    """Leave without interpreter teardown after needs_lib tests.
+
+    On Linux liblogosdelivery segfaults while the interpreter shuts down even though every
+    test passed and all nodes were stopped (exit code 139). Everything has been reported by
+    now, so exit with pytest's own status instead of letting the native teardown crash it.
+    """
+    if _run["needs_lib"]:
+        import os
+        import sys
+
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(_run["status"])
+
+
 @pytest.fixture(scope="session")
 def rsa_key_pem() -> bytes:
     from cryptography.hazmat.primitives import serialization
