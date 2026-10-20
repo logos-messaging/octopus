@@ -11,6 +11,7 @@ ENTRY_NODES_ENV = "OCTOPUS_ENTRY_NODES"
 PUBLIC_IP_ENV = "OCTOPUS_PUBLIC_IP"
 TCP_PORT_ENV = "OCTOPUS_TCP_PORT"
 NAT_ENV = "OCTOPUS_NAT"
+ROOT_KEY_ENV = "OCTOPUS_ROOT_KEY"
 
 
 def _base(tcp_port: int, entry_nodes: Sequence[str], nat: str | None) -> dict:
