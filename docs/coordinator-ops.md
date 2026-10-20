@@ -136,11 +136,15 @@ are never logged.
    `coordinator.key`. If you use signed discovery, have the root-key holder issue a certificate
    for the new one ([networking.md](networking.md)). Runners then learn it by itself.
 3. Set `OCTOPUS_ENTRY_NODES` on each coordinator to the other's multiaddr (shown on start).
-4. **Webhook**: GitHub delivers each event to one URL. Until failover (#17) lands, run one
-   coordinator as active and keep the second as a warm standby: if the active one dies,
-   change the DNS record or the App's webhook URL to the standby. Both must share
-   `OCTOPUS_WEBHOOK_SECRET` (or have the old one in `_PREVIOUS`) and the same allowlist. Do not
-   point GitHub at both: they would offer the same job twice.
+4. **Cluster keys**: `octopus coordinator start` prints a `cluster key` (kept in `cluster.key`).
+   On each coordinator set `OCTOPUS_COORDINATOR_PEERS=<id>=<cluster key>,...` with the *other*
+   coordinators' ids and keys (id and key are shown by `octopus coordinator status`), then
+   restart. With peers configured the coordinators form a cluster.
+5. **Webhook**: GitHub delivers each event to one URL. Point it at DNS or a load balancer in
+   front of all coordinators with health checks; any live one may receive a webhook and the
+   cluster routes the job to its owner (see [architecture.md](architecture.md)). All must
+   share `OCTOPUS_WEBHOOK_SECRET` (or have the old one in `_PREVIOUS`) and the same allowlist.
+   Without peers configured, run a single active coordinator and do not point GitHub at several.
 
 ### Rotating secrets
 

@@ -465,6 +465,10 @@ def _print_coordinator(state: dict) -> None:
     typer.echo(f"                runners: octopus runner setup --coordinator {state['public_key']}")
     for addr in state.get("multiaddrs") or []:
         typer.echo(f"entry node      {addr}")
+    if state.get("cluster_key"):
+        peers = ", ".join(state.get("peers") or []) or "none configured"
+        typer.echo(f"cluster key     {state['cluster_key']}")
+        typer.echo(f"                peers: {peers}; give this key to the others as OCTOPUS_COORDINATOR_PEERS={state['coordinator_id']}=<key>")
     webhook = state.get("webhook") or "-"
     public = state.get("webhook_url")
     typer.echo(f"webhook         {webhook}" + (f" (public: {public})" if public else ""))
