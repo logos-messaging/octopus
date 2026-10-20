@@ -169,7 +169,9 @@ def test_status_events_and_callbacks(transport):
     node = FakeNode.instances[0]
     assert transport.status == "Connected"
     node.emit({"eventType": "node_health_change", "status": "Disconnected"})
-    assert wait(lambda: seen == ["Disconnected"])
+    # start() queues a "Connected" event; on a slow runner the handler thread can
+    # deliver it after the callback is registered, so only the last one is certain.
+    assert wait(lambda: seen[-1:] == ["Disconnected"])
     assert transport.status == "Disconnected"
     assert not transport.wait_connected(0.05)
     threading.Timer(
