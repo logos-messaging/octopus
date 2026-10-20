@@ -294,6 +294,34 @@ def test_status_during_offer_is_applied_after_ack():
     assert env.state("j1") is State.RUNNER_STARTED
 
 
+def test_status_arriving_during_replay_does_not_overtake_queued_ones():
+    env = Env()
+    env.registry.add("r1")
+
+    def offer(job_id, runner):
+        for kw in ({"state": "runner-started"}, {"state": "step", "step": "b"}):
+            env.scheduler.on_status(JobStatus(job_id=job_id, runner_id="r1", **kw))
+        return ACCEPT
+
+    env.offers.script = offer
+    real_apply = env.scheduler._apply_status
+    injected = []
+
+    def apply(job, runner_id, status):
+        if status.state == "step" and not injected:
+            # What a runner thread does while the queued statuses are replayed.
+            injected.append(True)
+            env.scheduler.on_status(JobStatus(job_id="j1", runner_id="r1", state="finished"))
+        real_apply(job, runner_id, status)
+
+    env.scheduler._apply_status = apply
+    env.scheduler.submit("j1", "acme/app")
+    env.scheduler.tick()
+    states = [e.state for e in env.store.timeline("j1")]
+    assert states[-3:] == [State.RUNNER_STARTED, State.RUNNING, State.FINISHED]
+    assert not env.scheduler._active and not env.scheduler._inflight
+
+
 def test_job_secret_not_logged(caplog):
     env = Env()
     env.registry.add("r1")
