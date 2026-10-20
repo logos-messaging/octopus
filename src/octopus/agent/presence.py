@@ -17,6 +17,7 @@ class RunnerInfo:
     arch: str
     labels: tuple[str, ...] = field(default_factory=tuple)
     capacity: int = 1
+    pubkey: str | None = None
 
 
 class PresencePublisher:
@@ -72,5 +73,6 @@ class PresencePublisher:
             busy=busy,
             sent_at=time.time(),
             offline=offline,
+            pubkey=self._info.pubkey,
         )
         self._transport.publish(PRESENCE_TOPIC, msg.model_dump_json().encode())

@@ -14,7 +14,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .base import Handler, Transport
+from .base import ChannelHandler, ChannelTransport, Cipher, Handler, SendResult
 
 log = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ def _load_bindings():
     if root not in sys.path:
         sys.path.insert(0, root)
     try:
-        import logosdelivery  # noqa: PLC0415
+        import logosdelivery
     except (ImportError, OSError) as e:
         raise LogosLibraryError(
             f"could not load logos-delivery bindings from: {root}; expected "
@@ -79,7 +79,7 @@ class LogosConfig:
         return cfg
 
 
-class LogosTransport(Transport):
+class LogosTransport(ChannelTransport):
     """Transport over liblogosdelivery's messaging API (logos-delivery-python-bindings).
 
     The library invokes our event callback on its own thread. That callback only
@@ -106,6 +106,10 @@ class LogosTransport(Transport):
         self._status_changed = threading.Condition()
         self._status = DISCONNECTED
         self._delivered_hashes: OrderedDict[str, None] = OrderedDict()
+        self._channels: dict[str, _Channel] = {}
+        # request_id -> callback, plus results that arrived before their callback was set.
+        self._send_waiters: dict[str, SendResult | None] = {}
+        self._send_results: dict[str, tuple[bool, str | None]] = {}
         self.dropped_events = 0
 
     # lifecycle
@@ -211,6 +215,62 @@ class LogosTransport(Transport):
                 f"could not publish to topic: {topic}",
             )
 
+    # reliable encrypted channels
+
+    def open_channel(
+        self,
+        channel_id: str,
+        topic: str,
+        sender_id: str,
+        cipher: Cipher,
+        on_message: ChannelHandler,
+    ) -> None:
+        with self._lifecycle_lock:
+            node = self._require_node()
+            channel = _Channel(channel_id, topic, sender_id, cipher, on_message)
+            channel.create(node)
+            self._channels[channel_id] = channel
+
+    def send_on_channel(
+        self, channel_id: str, payload: bytes, on_result: SendResult | None = None
+    ) -> None:
+        message = {"payload": base64.b64encode(payload).decode(), "ephemeral": False}
+        with self._lifecycle_lock:
+            request_id = _unwrap(
+                self._require_node().channel_send(channel_id, message),
+                f"could not send on channel: {channel_id}",
+            )
+        self._register_send(str(request_id), on_result)
+
+    def close_channel(self, channel_id: str) -> None:
+        with self._lifecycle_lock:
+            self._channels.pop(channel_id, None)
+            if self._node is not None:
+                _unwrap(
+                    self._node.channel_close(channel_id),
+                    f"could not close channel: {channel_id}",
+                )
+
+    def _register_send(self, request_id: str, on_result: SendResult | None) -> None:
+        if on_result is None:
+            return
+        with self._lifecycle_lock:
+            early = self._send_results.pop(request_id, None)
+            if early is None:
+                self._send_waiters[request_id] = on_result
+                return
+        on_result(*early)
+
+    def _finish_send(self, request_id: str, delivered: bool, reason: str | None) -> None:
+        with self._lifecycle_lock:
+            waiter = self._send_waiters.pop(request_id, None)
+            if waiter is None:
+                self._send_results[request_id] = (delivered, reason)
+                if len(self._send_results) > _DEDUP_SIZE:
+                    self._send_results.pop(next(iter(self._send_results)))
+                return
+        waiter(delivered, reason)
+
     def multiaddrs(self) -> list[str]:
         """Addresses other nodes can use as `entry_nodes` to reach this one."""
         with self._lifecycle_lock:
@@ -278,6 +338,8 @@ class LogosTransport(Transport):
                     node.subscribe_content_topic(topic),
                     f"could not re-subscribe to topic: {topic}",
                 )
+            for channel in self._channels.values():
+                channel.create(node)
         except Exception:
             node.stop_and_destroy()
             raise
@@ -311,6 +373,8 @@ class LogosTransport(Transport):
             return
         if kind == "message_received":
             self._event_queue.put(("msg", event))
+        elif kind in _CHANNEL_EVENTS:
+            self._event_queue.put(("chan", event))
         elif kind == "node_health_change":
             status = event.get("status")
             if isinstance(status, str):
@@ -326,6 +390,8 @@ class LogosTransport(Transport):
             try:
                 if kind == "msg":
                     self._deliver(data)
+                elif kind == "chan":
+                    self._deliver_channel_event(data)
                 else:
                     for cb in list(self._status_callbacks):
                         cb(data)
@@ -349,3 +415,89 @@ class LogosTransport(Transport):
             self._delivered_hashes[mhash] = None
             if len(self._delivered_hashes) > _DEDUP_SIZE:
                 self._delivered_hashes.popitem(last=False)
+
+    def _deliver_channel_event(self, event: dict) -> None:
+        kind = event.get("eventType")
+        channel_id = event.get("channelId")
+        if kind == "channel_message_received":
+            channel = self._channels.get(channel_id)
+            payload = event.get("payload")
+            if channel is not None and payload is not None:
+                channel.on_message(str(event.get("senderId", "")), base64.b64decode(payload))
+        elif kind == "channel_message_sent":
+            self._finish_send(str(event.get("requestId")), True, None)
+        elif kind == "channel_message_error":
+            self._finish_send(str(event.get("requestId")), False, str(event.get("error")))
+        elif kind == "channel_message_lost":
+            log.warning("channel message lost: %s: %s", channel_id, event.get("reason"))
+
+
+_CHANNEL_EVENTS = {
+    "channel_message_received",
+    "channel_message_sent",
+    "channel_message_error",
+    "channel_message_lost",
+}
+
+
+class _Channel:
+    """One channel and the cffi cipher callbacks the library keeps calling until destroy.
+
+    The callbacks run inline on the library's event loop. They only transform bytes and
+    never log, so no plaintext or key reaches a log line.
+    """
+
+    def __init__(
+        self,
+        channel_id: str,
+        topic: str,
+        sender_id: str,
+        cipher: Cipher,
+        on_message: ChannelHandler,
+    ) -> None:
+        import cffi
+
+        self.channel_id = channel_id
+        self.topic = topic
+        self.sender_id = sender_id
+        self.on_message = on_message
+        self._ffi = cffi.FFI()
+        self._keep: list = []
+        self._enc = self._make_callback(cipher.encrypt)
+        self._dec = self._make_callback(cipher.decrypt)
+
+    def _make_callback(self, fn):
+        ffi = self._ffi
+        holder: dict = {}
+
+        @ffi.callback("int(void*, const uint8_t*, size_t, const uint8_t**, size_t*)")
+        def cb(_user, inp, in_len, out, out_len):
+            try:
+                data = ffi.buffer(inp, in_len)[:] if in_len else b""
+                result = fn(data)
+                # ffi.new("uint8_t[]", bytes) would add a trailing NUL byte.
+                buf = ffi.new("uint8_t[]", max(len(result), 1))
+                ffi.memmove(buf, result, len(result))
+                holder["buf"] = buf  # must outlive the call; the library copies it on return
+                out[0] = buf
+                out_len[0] = len(result)
+                return 0
+            except Exception:  # noqa: BLE001  never let an exception cross into C
+                return 1
+
+        self._keep.append((cb, holder))
+        return cb
+
+    def create(self, node) -> None:
+        ffi = self._ffi
+        _unwrap(
+            node.channel_create(
+                self.channel_id,
+                self.topic,
+                self.sender_id,
+                encrypt_fn=int(ffi.cast("uintptr_t", self._enc)),
+                decrypt_fn=int(ffi.cast("uintptr_t", self._dec)),
+                crypto_user_data=0,
+            ),
+            f"could not create channel: {self.channel_id}",
+        )
