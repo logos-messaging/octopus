@@ -198,7 +198,11 @@ class WebhookReceiver:
     """Verifies, de-duplicates and parses GitHub deliveries, then hands Octopus jobs to `sink`.
 
     `sink` runs on the request thread and must not block (enqueue and return). If it raises,
-    the delivery answers 500 and is released, so GitHub's redelivery is processed again.
+    the delivery answers 500 and is released, so a *manual* redelivery is processed again.
+    GitHub does NOT retry failed deliveries on its own: a job whose `sink` failed stays queued
+    on GitHub until it is redelivered by hand or reconciled through the API, so `sink` should
+    persist the event durably (a failure there is then rare) and the coordinator should
+    periodically reconcile queued jobs.
     """
 
     def __init__(

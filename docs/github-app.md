@@ -63,10 +63,16 @@ What it does with a delivery, in order:
 | Invalid JSON or malformed `workflow_job` | `400` |
 | Job without the `octopus` label (case-insensitive) | `202 ignored` |
 | Delivery id already processed (GitHub keeps the id on redelivery) | `200 duplicate delivery` |
-| Handed to the coordinator | `202 accepted` (`500` if that fails; the redelivery is then processed) |
+| Handed to the coordinator | `202 accepted` (`500` if that fails; see below) |
 
 Several webhook secrets can be configured at once, so the secret can be rotated without
 dropping deliveries: add the new one, change it on GitHub, remove the old one.
+
+GitHub does not retry a delivery that failed (non-2xx or timeout). After a `500`, the job
+stays queued on GitHub until you **Redeliver** it by hand, which is then processed because
+the id was released. To avoid depending on that, the coordinator must persist an event
+before answering and reconcile queued jobs through the API on startup and periodically
+(planned with the scheduler, #15).
 
 The webhook path makes no GitHub API calls, so it always answers inside GitHub's 10 s limit.
 Delivery ids are remembered in memory for 3 days; a restarted coordinator relies on the job
