@@ -1,0 +1,12 @@
+# Build context is the repo root. LIB must point at a Linux liblogosdelivery.so:
+#   docker compose -f tests/nat/docker-compose.yml build --build-arg LIB=path/to/liblogosdelivery.so
+FROM python:3.12-slim
+ARG LIB
+WORKDIR /app
+COPY pyproject.toml README.md ./
+COPY src ./src
+COPY vendor/logos-delivery-python-bindings ./vendor/logos-delivery-python-bindings
+COPY ${LIB} ./vendor/logos-delivery-python-bindings/lib/liblogosdelivery.so
+RUN pip install --no-cache-dir -e '.[logos]'
+COPY tests/nat/nat_check.py ./nat_check.py
+CMD ["python", "nat_check.py"]

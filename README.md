@@ -59,6 +59,13 @@ pip install -e '.[logos]'
 pytest -m needs_lib
 ```
 
+The bindings load `lib/liblogosdelivery.so` from their own checkout. Octopus looks for them
+in `vendor/logos-delivery-python-bindings`; set `OCTOPUS_BINDINGS` to use another checkout.
+If the library is missing, `LogosTransport.start()` fails with an error naming the expected path.
+
+Node mode: coordinators run `Core` (relay, public IP); runners on laptops can use `Edge`
+(light client) and point `entry_nodes` at the coordinators (see `LogosConfig`).
+
 ## Layout
 
 - `src/octopus/transport/`: `Transport` interface, `LogosTransport` (logos-delivery), `MemoryTransport` (tests)

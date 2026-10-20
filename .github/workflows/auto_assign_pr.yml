@@ -1,0 +1,14 @@
+name: Auto Assign PR to Creator
+
+on:
+  pull_request:
+    types:
+      - opened
+
+jobs:
+  assign_creator:
+    runs-on: ubuntu-22.04
+    permissions:
+      pull-requests: write
+    steps:
+      - uses: toshimaru/auto-author-assign@v1.6.2
