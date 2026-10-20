@@ -80,9 +80,9 @@ store to ignore repeated transitions.
 - **repo**: from the payload.
 - **head repo**: the workflow run's `head_repository` (`GET /repos/{o}/{r}/actions/runs/{id}`).
   For a fork PR this is the fork. A missing head repo counts as a fork.
-- **event**: the run's trigger (`push`, `pull_request`, `pull_request_target`, ...), kept
-  for the policy. `pull_request_target` runs in the base repo but may check out fork code;
-  see the threat model.
+- **event**: the run's trigger (`push`, `pull_request`, `pull_request_target`, ...). The
+  policy serves only `push` and `pull_request`: `pull_request_target`, `workflow_run` and
+  `issue_comment` run in the base repo but can check out fork code, so they are rejected.
 - **sender** and **org membership**: `GET /orgs/{org}/members/{sender}` (204 member, 404 not).
   For a repo owned by a user account only that user counts. Bots are never members.
 

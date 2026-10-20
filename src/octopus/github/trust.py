@@ -39,6 +39,7 @@ class TrustInputs:
             repo=self.repo,
             head_repo=self.head_repo,
             sender_is_org_member=self.sender_is_org_member,
+            event=self.event,
         )
 
 

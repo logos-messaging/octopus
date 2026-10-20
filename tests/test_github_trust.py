@@ -133,3 +133,11 @@ def test_installation_looked_up_when_payload_has_none(rsa_key_pem):
     resolve_trust_inputs(parse_workflow_job(payload, "d1"), make_app(rsa_key_pem, gh))
     assert f"/repos/{REPO}/installation" in gh.paths
     assert "/app/installations/99/access_tokens" in gh.paths
+
+
+def test_pull_request_target_is_rejected_even_for_same_repo_member(rsa_key_pem):
+    gh = FakeGitHub(run=run_response(event="pull_request_target"))
+    inputs = resolve_trust_inputs(org_job(), make_app(rsa_key_pem, gh))
+    assert not inputs.is_fork and inputs.sender_is_org_member
+    ok, reason = POLICY.check(inputs.job_context())
+    assert not ok and "event" in reason
