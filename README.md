@@ -96,6 +96,7 @@ Node mode: coordinators run `Core` (relay, public IP); runners on laptops can us
 - `src/octopus/agent/`: runner agent (config, presence, offers, trust, runner manager)
 - `docs/architecture.md`: design; `docs/github-app.md`: GitHub App setup; `docs/issues/`: the issue specs
 - `docs/github-setup.md`: one-repo setup with a token (`octopus github setup`)
+- `docs/coordinator-ops.md`: running a coordinator in production (Docker/systemd, TLS, metrics, rotation); `deploy/` has the files
 - `docs/threat-model.md`: what Octopus protects against and what it does not; `CONTRIBUTING.md`: how to contribute
 
 ## License

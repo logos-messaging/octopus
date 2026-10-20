@@ -1,0 +1,11 @@
+global:
+  scrape_interval: 15s
+
+rule_files:
+  - alerts.yml
+
+scrape_configs:
+  - job_name: octopus-coordinator
+    static_configs:
+      # Inside docker compose. On a plain host use the coordinator's address and port 9100.
+      - targets: ["coordinator:9100"]

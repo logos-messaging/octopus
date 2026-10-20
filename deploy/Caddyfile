@@ -1,0 +1,17 @@
+# TLS in front of the webhook listener. Caddy gets and renews the certificate by itself;
+# the host name must already resolve to this machine and ports 80/443 must be open.
+# Only the webhook path is forwarded: /metrics and /healthz are never published.
+{$OCTOPUS_DOMAIN} {
+	encode gzip
+
+	handle /github/webhook {
+		request_body {
+			max_size 1MB
+		}
+		reverse_proxy coordinator:8080
+	}
+
+	handle {
+		respond "not found" 404
+	}
+}
