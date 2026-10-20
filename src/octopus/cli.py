@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import typer
@@ -42,21 +43,10 @@ def explain(job_id: str) -> None:
     _todo("explain")
 
 
-@runner_app.command("start")
-def runner_start() -> None:
-    """Start offering this machine as a runner."""
-    _todo("runner start")
-
-
-@runner_app.command("stop")
-def runner_stop() -> None:
-    _todo("runner stop")
-
-
-@runner_app.command("status")
-def runner_status() -> None:
-    _todo("runner status")
-
+EXIT_USAGE = 2
+EXIT_BAD_CONFIG = 3
+EXIT_TRANSPORT = 4
+EXIT_NOT_RUNNING = 5
 
 ConfigOption = typer.Option(
     None, "--config", help="Runner config file (default: the platform config dir)."
@@ -112,6 +102,164 @@ def runner_list(config: Path | None = ConfigOption) -> None:
         typer.echo(f"org   {org}")
     for repo in sorted(allowlist.repos):
         typer.echo(f"repo  {repo}")
+
+
+EntryNodeOption = typer.Option(
+    None, "--entry-node", help="Extra logos-delivery entry node multiaddr (repeatable)."
+)
+CoordinatorOption = typer.Option(
+    None,
+    "--coordinator",
+    help="Public key of a coordinator to trust (repeatable). Printed by the coordinator.",
+)
+LabelsOption = typer.Option(None, "--labels", help="Extra runner labels (repeatable).")
+MaxJobsOption = typer.Option(None, "--max-jobs", min=1, help="Jobs to run at the same time.")
+
+
+def _fail(message: str, code: int) -> typer.Exit:
+    typer.echo(f"error: {message}", err=True)
+    return typer.Exit(code=code)
+
+
+def _resolve_settings(
+    config: Path | None,
+    entry_nodes: list[str] | None,
+    coordinators: list[str] | None,
+    labels: list[str] | None,
+    max_jobs: int | None,
+):
+    from .agent.config import ConfigError, RunnerConfig, settings_path
+    from .agent.trust import default_config_path
+
+    path = settings_path(config or default_config_path())
+    try:
+        saved = RunnerConfig.load(path)
+        merged = saved.merged(
+            os.environ,
+            entry_nodes=entry_nodes or (),
+            coordinators=coordinators or (),
+            labels=labels or (),
+            max_jobs=max_jobs,
+        )
+    except ConfigError as e:
+        raise _fail(str(e), EXIT_BAD_CONFIG) from e
+    return merged, path
+
+
+@runner_app.command("setup")
+def runner_setup(
+    config: Path | None = ConfigOption,
+    entry_node: list[str] | None = EntryNodeOption,
+    coordinator: list[str] | None = CoordinatorOption,
+    labels: list[str] | None = LabelsOption,
+    max_jobs: int | None = MaxJobsOption,
+) -> None:
+    """Save this runner's settings (entry nodes, trusted coordinators, labels, max jobs)."""
+    from .agent.config import ConfigError
+
+    settings, path = _resolve_settings(config, entry_node, coordinator, labels, max_jobs)
+    try:
+        settings.save(path)
+    except ConfigError as e:
+        raise _fail(str(e), EXIT_BAD_CONFIG) from e
+    typer.echo(f"saved settings: {path}")
+    if not settings.coordinators:
+        typer.echo(
+            "note: no coordinator trusted yet; add one with: octopus runner setup --coordinator <key>"
+        )
+
+
+@runner_app.command("start")
+def runner_start(
+    config: Path | None = ConfigOption,
+    entry_node: list[str] | None = EntryNodeOption,
+    coordinator: list[str] | None = CoordinatorOption,
+    labels: list[str] | None = LabelsOption,
+    max_jobs: int | None = MaxJobsOption,
+    allow_empty: bool = typer.Option(
+        False, "--allow-empty", help="Start even if nothing is allowed (rejects every job)."
+    ),
+    connect_timeout: float = typer.Option(60.0, help="Seconds to wait for the network."),
+) -> None:
+    """Offer this machine as a runner (runs in the foreground until Ctrl-C)."""
+    from .agent.runner import default_data_dir
+    from .agent.runner_agent import RunnerAgent, read_state
+    from .transport.logos import LogosError, LogosLibraryError, LogosTransport
+
+    settings, _ = _resolve_settings(config, entry_node, coordinator, labels, max_jobs)
+    allowlist, _ = _load_allowlist(config)
+    if not settings.coordinators:
+        raise _fail(
+            "no trusted coordinator: run: octopus runner setup --coordinator <key>",
+            EXIT_BAD_CONFIG,
+        )
+    if not allowlist.orgs and not allowlist.repos and not allow_empty:
+        raise _fail(
+            "nothing is allowed, this runner would reject every job: "
+            "run: octopus runner allow <org/repo> (or pass --allow-empty)",
+            EXIT_BAD_CONFIG,
+        )
+    data_dir = default_data_dir()
+    running = read_state(data_dir)
+    if running:
+        raise _fail(f"already running: pid: {running['pid']}", 1)
+
+    transport = LogosTransport(settings.node_config())
+    agent = RunnerAgent(settings, allowlist, transport, data_dir=data_dir)
+    try:
+        agent.start()
+    except LogosLibraryError as e:
+        raise _fail(f"could not load liblogosdelivery, see the README: {e}", EXIT_TRANSPORT) from e
+    except LogosError as e:
+        raise _fail(f"could not start the node: {e}", EXIT_TRANSPORT) from e
+    agent.install_signal_handlers()
+    if not transport.wait_connected(connect_timeout):
+        typer.echo("warning: not connected to the network yet, still trying", err=True)
+    typer.echo(f"runner online: {agent.runner_id} (max jobs: {settings.max_jobs}); Ctrl-C to stop")
+    agent.wait()
+    typer.echo("runner stopped")
+
+
+@runner_app.command("status")
+def runner_status() -> None:
+    """Show whether the runner is running and how busy it is."""
+    from .agent.runner import default_data_dir
+    from .agent.runner_agent import read_state
+
+    state = read_state(default_data_dir())
+    if state is None:
+        typer.echo("not running")
+        raise typer.Exit(code=EXIT_NOT_RUNNING)
+    typer.echo(
+        f"running: pid {state['pid']}, runner {state['runner_id']}, "
+        f"busy {state['busy']}/{state['max_jobs']}"
+    )
+
+
+@runner_app.command("stop")
+def runner_stop(timeout: float = typer.Option(60.0, help="Seconds to wait for shutdown.")) -> None:
+    """Stop the running runner (it finishes shutting down running jobs first)."""
+    import signal
+    import time
+
+    from .agent.runner import default_data_dir
+    from .agent.runner_agent import pid_alive, read_state
+
+    state = read_state(default_data_dir())
+    if state is None:
+        typer.echo("not running")
+        raise typer.Exit(code=EXIT_NOT_RUNNING)
+    pid = state["pid"]
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError as e:
+        raise _fail(f"could not stop runner: pid: {pid}: {e}", 1) from e
+    deadline = time.monotonic() + timeout
+    while pid_alive(pid):
+        if time.monotonic() > deadline:
+            raise _fail(f"runner did not stop in time: pid: {pid}", 1)
+        time.sleep(0.2)
+    typer.echo("stopped")
 
 
 @coordinator_app.command("start")

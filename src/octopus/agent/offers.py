@@ -11,7 +11,7 @@ from pydantic import ValidationError
 
 from ..clock import Clock, SystemClock
 from ..crypto import PairCipher, decode_public_key, derive_channel_key, node_id
-from ..proto import FailureReason, JobAck, JobOffer, job_channel_id, jobs_topic
+from ..proto import FailureReason, JobAck, JobOffer, JobStatus, job_channel_id, jobs_topic
 from ..transport import ChannelTransport
 
 log = logging.getLogger(__name__)
@@ -73,6 +73,12 @@ class OfferReceiver:
         for channel_id in self._channels:
             self._transport.close_channel(channel_id)
         self._channels.clear()
+
+    def send_status(self, coordinator_id: str, status: JobStatus) -> None:
+        channel_id = job_channel_id(coordinator_id, self.runner_id)
+        if channel_id not in self._channels:
+            raise ValueError(f"could not send status: untrusted coordinator: {coordinator_id}")
+        self._transport.send_on_channel(channel_id, status.model_dump_json().encode())
 
     def _on_message(self, channel_id: str, payload: bytes) -> None:
         try:

@@ -29,12 +29,30 @@ not org members. It is not a public runner pool.
 ## One CLI, two roles
 
 ```
-octopus runner start|stop|status|allow   # on runner hosts (laptops)
+octopus runner setup|allow|start|status|stop   # on runner hosts (laptops)
 octopus coordinator start|status          # on coordinator hosts (VPS)
 octopus jobs [--failed]                   # list jobs
 octopus logs <job> [-f]                   # job logs
 octopus explain <job>                     # timeline and why it failed
 ```
+
+## Quickstart: lend a laptop
+
+```bash
+octopus runner setup --coordinator <coordinator-public-key>   # who may send you jobs
+octopus runner allow acme/app                                 # repo (org/name) or whole org
+octopus runner start                                          # foreground; Ctrl-C to stop
+octopus runner status                                         # from another shell
+octopus runner stop
+```
+
+Settings and the allowlist live in the platform config dir (`--config` selects another
+location; both files sit next to each other). `--entry-node`, `--labels` and `--max-jobs`
+can be saved with `setup` or passed to `start`; `OCTOPUS_ENTRY_NODES`, `OCTOPUS_TCP_PORT`
+and `OCTOPUS_NAT` override the saved file, and flags override both. Exit codes: 2 usage,
+3 bad config, 4 network/library failure, 5 not running. The runner needs no GitHub login:
+the coordinator checks org membership. Until coordinator discovery (#38) the coordinator's
+public key is passed by hand.
 
 ## Develop
 
@@ -73,7 +91,7 @@ Node mode: coordinators run `Core` (relay, public IP); runners on laptops can us
 - `src/octopus/policy.py`: trust policy
 - `src/octopus/github/`: GitHub App auth, webhook verification and parsing, trust-policy inputs
 - `src/octopus/coordinator/`: coordinator; so far the webhook HTTP endpoint
-- `src/octopus/agent/`: runner agent, to be implemented
+- `src/octopus/agent/`: runner agent (config, presence, offers, trust, runner manager)
 - `docs/architecture.md`: design; `docs/github-app.md`: GitHub App setup; `docs/issues/`: the issue specs
 
 ## License
