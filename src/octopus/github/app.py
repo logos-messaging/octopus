@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
-from typing import Any
+from typing import Any, Protocol
 from urllib.parse import quote
 
 import httpx
@@ -55,6 +55,18 @@ def _error_message(resp: httpx.Response) -> str:
         return str(resp.json().get("message", ""))[:200]
     except (ValueError, AttributeError):
         return ""
+
+
+class GitHubClient(Protocol):
+    """What API users need: `GitHubApp` (App auth) or `TokenClient` (a personal token)."""
+
+    def repo_installation_id(self, repo: str) -> int: ...
+
+    def request(
+        self, method: str, path: str, installation_id: int, **kw: Any
+    ) -> httpx.Response: ...
+
+    def get_json(self, path: str, installation_id: int) -> Any: ...
 
 
 class GitHubApp:
