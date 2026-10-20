@@ -8,6 +8,7 @@ from typing import Protocol
 from pydantic import ValidationError
 
 from ..clock import Clock, SystemClock
+from ..crypto import KeyMaterialError, decode_public_key, node_id
 from ..proto import PRESENCE_TOPIC, Presence
 from ..transport import Transport
 
@@ -108,8 +109,18 @@ class Registry:
             presence = Presence.model_validate_json(payload)
         except ValidationError:
             return
+        if presence.pubkey is not None and not _id_matches_key(presence):
+            return
         with self._lock:
             if presence.offline:
                 self._store.remove(presence.runner_id)
             else:
                 self._store.put(Entry(presence, self._clock.monotonic()))
+
+
+def _id_matches_key(presence: Presence) -> bool:
+    """A runner id is derived from its key, so a forged presence cannot claim another's id."""
+    try:
+        return node_id(decode_public_key(presence.pubkey or "")) == presence.runner_id
+    except KeyMaterialError:
+        return False

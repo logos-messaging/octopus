@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr, field_serializer
 
 TOPIC_PREFIX = "/octopus/1"
 PRESENCE_TOPIC = f"{TOPIC_PREFIX}/presence/proto"
@@ -39,16 +39,26 @@ class Presence(BaseModel):
     sent_at: float
     # Sent once on graceful shutdown so coordinators drop the runner immediately.
     offline: bool = False
+    # Runner's X25519 public key; `runner_id` is derived from it.
+    pubkey: str | None = None
 
 
 class JobOffer(BaseModel):
     kind: Literal["job-offer"] = "job-offer"
     job_id: str
     repo: str
-    # Encrypted for the target runner only; never logged.
-    jit_config_enc: str
+    runner_id: str = ""
+    coordinator_id: str = ""
+    # Travels only inside the encrypted channel to this runner; never logged.
+    jit_config: SecretStr
     labels: list[str] = Field(default_factory=list)
-    offer_ttl_s: int = 30
+    offer_ttl_s: float = 30
+    expires_at: float = 0.0
+    nonce: str = ""
+
+    @field_serializer("jit_config", when_used="json")
+    def _reveal_jit_config(self, value: SecretStr) -> str:
+        return value.get_secret_value()
 
 
 class JobAck(BaseModel):
