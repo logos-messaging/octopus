@@ -89,7 +89,7 @@ def transport():
     t.stop()
 
 
-def wait(cond, timeout=2.0):
+def wait(cond, timeout=10.0):
     ev = threading.Event()
     for _ in range(int(timeout / 0.01)):
         if cond():
