@@ -10,7 +10,7 @@ import pytest
 from harness import REPO, Behavior, Cluster, LossyTransport, wait_until
 from pydantic import SecretStr
 
-from octopus.coordinator import OfferOutcome, OfferSender, SchedulerConfig
+from octopus.coordinator import ClusterConfig, OfferOutcome, OfferSender, SchedulerConfig
 from octopus.coordinator.jobs import State
 from octopus.crypto import generate_private_key
 from octopus.proto import FailureReason
@@ -223,10 +223,11 @@ def test_runner_accepts_offers_from_any_pinned_coordinator(tmp_path):
     cluster = Cluster(tmp_path, coordinators=2)
     try:
         node = cluster.add_runner("a")
-        cluster.coordinators[1].deliver(1)  # the first coordinator is down: never ticks
+        job = owned_by(cluster, 1)
+        cluster.coordinators[1].deliver(job)  # the first coordinator never ticks
         cluster.tick(1)
-        wait_until(finished_on(cluster, 1, 1), what="job done via coordinator 2")
-        assert node.runs == ["1"]
+        wait_until(finished_on(cluster, 1, job), what="job done via coordinator 2")
+        assert node.runs == [str(job)]
     finally:
         cluster.close()
 
@@ -235,14 +236,79 @@ def finished_on(c, idx, job_id):
     return lambda: c.coordinators[idx].job(job_id).state in (State.FINISHED, State.FAILED)
 
 
-@pytest.mark.xfail(strict=True, reason="needs #17: coordinators do not take over each other's jobs")
+def owned_by(c, idx):
+    """A job id that rendezvous hashing assigns to coordinator `idx` while both are alive."""
+    want = c.coordinators[idx].sender.coordinator_id
+    return next(j for j in range(1, 1000) if c.coordinators[0].cluster.owner(str(j)) == want)
+
+
+def two_coordinators(tmp_path):
+    return Cluster(tmp_path, coordinators=2, cluster=ClusterConfig(dead_after_s=2.0))
+
+
 def test_coordinator_failover_completes_a_queued_job(tmp_path):
-    cluster = Cluster(tmp_path, coordinators=2)
+    """The owner queues a job and dies before offering it: the survivor takes it over."""
+    cluster = two_coordinators(tmp_path)
     try:
         node = cluster.add_runner("a")
-        cluster.coordinators[0].deliver(1)  # coordinator 1 queues it, then dies
-        cluster.tick(1)  # coordinator 2 should notice and take over
-        wait_until(lambda: node.runs == ["1"], timeout_s=1, what="takeover")
+        job = owned_by(cluster, 0)
+        cluster.coordinators[0].deliver(job)  # coordinator 1 owns and queues it, then dies
+        cluster.clock.advance(3)  # past dead_after_s: coordinator 2 stops seeing it
+        cluster.tick(1)
+        wait_until(lambda: node.runs == [str(job)], timeout_s=2, what="takeover")
+        wait_until(finished_on(cluster, 1, job), what="job done via coordinator 2")
+        assert cluster.coordinators[1].job(job).state is State.FINISHED
+    finally:
+        cluster.close()
+
+
+def test_job_received_by_a_non_owner_runs_on_the_owner_only(tmp_path):
+    cluster = two_coordinators(tmp_path)
+    try:
+        node = cluster.add_runner("a")
+        job = owned_by(cluster, 1)
+        cluster.coordinators[0].deliver(job)  # the webhook lands on the non-owner
+        cluster.tick(0)
+        cluster.tick(1)
+        wait_until(finished_on(cluster, 1, job), what="job done on the owner")
+        assert node.runs == [str(job)]
+        assert cluster.coordinators[0].store.get(str(job)) is None
+        assert [len(c.github.requests) for c in cluster.coordinators] == [0, 1]
+    finally:
+        cluster.close()
+
+
+def test_live_coordinators_never_both_offer_a_job(tmp_path):
+    cluster = two_coordinators(tmp_path)
+    try:
+        node = cluster.add_runner("a")
+        jobs = [owned_by(cluster, 0), owned_by(cluster, 1)]
+        for job in jobs:
+            cluster.coordinators[0].deliver(job)
+        for _ in range(3):
+            cluster.tick(0)
+            cluster.tick(1)
+            wait_until(lambda: len(node.runs) >= 1, what="a job started")
+        wait_until(lambda: sorted(node.runs) == sorted(map(str, jobs)), what="both jobs ran")
+        offers = [r for c in cluster.coordinators for r in c.github.requests]
+        assert sorted(offers) == sorted(map(str, jobs))
+    finally:
+        cluster.close()
+
+
+def test_a_job_a_runner_already_accepted_is_not_taken_over(tmp_path):
+    cluster = two_coordinators(tmp_path)
+    try:
+        node = cluster.add_runner("a", Behavior(outcome="hang"))
+        job = owned_by(cluster, 0)
+        cluster.coordinators[0].deliver(job)
+        cluster.tick(0)
+        wait_until(lambda: node.runs == [str(job)], what="job running")
+        wait_until(lambda: cluster.coordinators[1].cluster.pending() == [], what="peer forgot it")
+        cluster.clock.advance(3)  # the owner dies while the job runs
+        cluster.tick(1)
+        assert cluster.coordinators[1].store.get(str(job)) is None
+        assert node.runs == [str(job)]
     finally:
         cluster.close()
 

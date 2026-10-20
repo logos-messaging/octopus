@@ -28,4 +28,4 @@ cluster.clock.advance(3600)                         # expire presence without sl
 
 Not covered here: a real `liblogosdelivery` round trip (see the `needs_lib` tests in
 `tests/test_channel_integration.py`), the docker-compose NAT test (`tests/nat/`), and
-coordinator failover (`xfail` until #17).
+coordinator failover (#17).
