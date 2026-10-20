@@ -8,7 +8,13 @@
 A GitHub App receives `workflow_job` webhooks (`queued`). The coordinator picks an idle runner, requests an ephemeral JIT runner config (`POST /repos/{o}/{r}/actions/runners/generate-jitconfig`, label `octopus`) and sends it over the encrypted job channel to that runner only. The runner starts `actions/runner --jitconfig`; it runs one job and exits. Workflows opt in with `runs-on: [self-hosted, octopus]`.
 
 ## Trust policy
-Only trusted internal PRs: the repo or org is on the allowlist, the PR branch is in the same repo (no forks) and the sender is an org member. Enforced twice: by the coordinator before offering, and by the runner before accepting.
+Only trusted internal PRs: the repo or org is on the allowlist, the PR branch is in the same repo (no forks), the sender is an org member and the trigger is not `pull_request_target` or `workflow_run` (they run with base-repo secrets and can check out attacker-controlled code). An empty allowlist rejects everything; names compare case-insensitively.
+
+Enforced twice (`octopus.policy.TrustPolicy`):
+- **Coordinator**, before offering: `Scheduler.submit(..., context)` checks the job; a denied job (or one without a context) fails as `policy-rejected` with the reason in its timeline and is never offered.
+- **Runner**, before accepting: `make_offer_handler` re-checks every offer against the lender's own allowlist (`octopus runner allow|deny|list`, stored in `runner.json` in the platform config dir). The runner cannot verify fork, sender or trigger itself, so it takes them from the offer; only a pinned coordinator can deliver one over the encrypted channel. The allowlist stays the lender's local decision, so a compromised coordinator can only reach what the lender allowed. The rejection detail travels back in `JobAck.detail` and shows up in `octopus explain`.
+
+See `docs/threat-model.md`.
 
 ## Messaging (content topics under `/octopus/1/`)
 | Topic | Purpose |

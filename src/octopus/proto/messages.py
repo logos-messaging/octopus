@@ -55,6 +55,11 @@ class JobOffer(BaseModel):
     offer_ttl_s: float = 30
     expires_at: float = 0.0
     nonce: str = ""
+    # Trust-policy facts, supplied by the coordinator over the authenticated channel.
+    # The defaults fail closed: the runner rejects an offer that does not state them.
+    head_repo: str = ""
+    event: str = ""
+    sender_is_org_member: bool = False
 
     @field_serializer("jit_config", when_used="json")
     def _reveal_jit_config(self, value: SecretStr) -> str:
@@ -67,6 +72,8 @@ class JobAck(BaseModel):
     runner_id: str
     accepted: bool
     reason: FailureReason | None = None
+    # Human-readable why, shown by `octopus explain`; never contains secrets.
+    detail: str | None = None
 
 
 class JobStatus(BaseModel):

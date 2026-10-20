@@ -4,6 +4,7 @@ import logging
 import threading
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 from pydantic import ValidationError
@@ -15,8 +16,14 @@ from ..transport import ChannelTransport
 
 log = logging.getLogger(__name__)
 
-# Returns None to accept the offer, or the reason to reject it (e.g. POLICY_REJECTED).
-OfferHandler = Callable[[JobOffer], FailureReason | None]
+@dataclass(frozen=True)
+class Rejection:
+    reason: FailureReason
+    detail: str | None = None
+
+
+# Returns None to accept the offer, or why it is rejected (e.g. POLICY_REJECTED).
+OfferHandler = Callable[[JobOffer], "FailureReason | Rejection | None"]
 
 _REPLAY_CACHE = 4096
 
@@ -99,11 +106,15 @@ class OfferReceiver:
                 self._seen.popitem(last=False)
         return False
 
-    def _ack(self, channel_id: str, offer: JobOffer, reason: FailureReason | None) -> None:
+    def _ack(
+        self, channel_id: str, offer: JobOffer, outcome: FailureReason | Rejection | None
+    ) -> None:
+        rejection = Rejection(outcome) if isinstance(outcome, FailureReason) else outcome
         ack = JobAck(
             job_id=offer.job_id,
             runner_id=self.runner_id,
-            accepted=reason is None,
-            reason=reason,
+            accepted=rejection is None,
+            reason=rejection.reason if rejection else None,
+            detail=rejection.detail if rejection else None,
         )
         self._transport.send_on_channel(channel_id, ack.model_dump_json().encode())

@@ -12,6 +12,7 @@ from octopus.coordinator import (
     SchedulerConfig,
 )
 from octopus.coordinator.jobs import SqliteJobStore, State
+from octopus.policy import JobContext, TrustPolicy
 from octopus.proto import FailureReason, JobStatus, Presence
 
 ACCEPT = OfferResult(OfferOutcome.ACCEPTED)
@@ -66,9 +67,11 @@ class FakeOffers:
     def __init__(self, script=None) -> None:
         self.script = script
         self.calls: list[tuple[str, str]] = []
+        self.contexts: dict = {}
 
-    def send_offer(self, runner, job_id, repo, jit_config, labels=None, ttl_s=30):
+    def send_offer(self, runner, job_id, repo, jit_config, labels=None, ttl_s=30, context=None):
         self.calls.append((job_id, runner.runner_id))
+        self.contexts[job_id] = context
         if callable(self.script):
             return self.script(job_id, runner)
         if isinstance(self.script, list) and self.script:
@@ -77,7 +80,7 @@ class FakeOffers:
 
 
 class Env:
-    def __init__(self, offers=None, jit=None, **config) -> None:
+    def __init__(self, offers=None, jit=None, policy=None, **config) -> None:
         self.clock = FakeClock()
         self.registry = FakeRegistry()
         self.store = SqliteJobStore(":memory:", clock=self.clock.now)
@@ -90,7 +93,7 @@ class Env:
 
         self.scheduler = Scheduler(
             self.registry, self.store, self.offers, jit or default_jit, self.clock,
-            SchedulerConfig(**config), InlineExecutor(),
+            SchedulerConfig(**config), InlineExecutor(), policy,
         )
 
     def state(self, job_id):
@@ -377,3 +380,62 @@ def test_with_real_offer_sender_and_status_callback():
         .model_dump_json().encode()
     )
     assert env.state("j1") is State.RUNNER_STARTED
+
+
+# trust policy
+
+TRUST = TrustPolicy(allowed_repos=frozenset({"acme/app"}))
+
+
+def ctx(**kw):
+    base = {"repo": "acme/app", "head_repo": "acme/app", "sender_is_org_member": True}
+    return JobContext(**{**base, **kw})
+
+
+def test_trusted_job_is_offered_with_its_context():
+    env = Env(policy=TRUST)
+    env.registry.add("r1")
+    context = ctx(event="pull_request")
+    assert env.scheduler.submit("j1", "acme/app", [], context)
+    env.scheduler.tick()
+    assert env.state("j1") is State.ACKED
+    assert env.offers.contexts["j1"] == context
+
+
+@pytest.mark.parametrize(
+    "context, why",
+    [
+        (ctx(head_repo="stranger/app"), "fork PR rejected"),
+        (ctx(sender_is_org_member=False), "not an org member"),
+        (ctx(event="pull_request_target"), "event not allowed"),
+        (ctx(repo="evil/app", head_repo="evil/app"), "repo not allowed"),
+        (None, "no trust context"),
+    ],
+)
+def test_untrusted_job_fails_policy_rejected_and_is_never_offered(context, why):
+    env = Env(policy=TRUST)
+    env.registry.add("r1")
+    assert env.scheduler.submit("j1", "acme/app", [], context)
+    env.scheduler.tick()
+    job = env.store.get("j1")
+    assert job.state is State.FAILED
+    assert job.reason is FailureReason.POLICY_REJECTED
+    assert why in env.store.timeline("j1")[-1].detail
+    assert env.offers.calls == [] and env.jit_calls == []
+
+
+def test_runner_side_rejection_detail_reaches_the_timeline():
+    offers = FakeOffers(
+        [OfferResult(OfferOutcome.REJECTED, FailureReason.POLICY_REJECTED, "repo not allowed: acme/app")]
+        * 3
+    )
+    env = Env(offers=offers)
+    env.registry.add("r1")
+    env.registry.add("r2")
+    env.registry.add("r3")
+    env.scheduler.submit("j1", "acme/app")
+    for _ in range(3):
+        env.scheduler.tick()
+    details = [e.detail for e in env.store.timeline("j1") if e.detail]
+    assert any("repo not allowed: acme/app" in d for d in details)
+    assert env.state("j1") is State.FAILED
