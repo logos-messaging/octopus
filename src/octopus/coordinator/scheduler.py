@@ -410,7 +410,7 @@ class Scheduler:
             self._transition(
                 job.job_id,
                 State.FAILED,
-                detail=f"exit code: {status.exit_code}",
+                detail=status.detail or f"exit code: {status.exit_code}",
                 reason=status.reason or FailureReason.JOB_FAILED,
             )
 

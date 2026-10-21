@@ -146,7 +146,7 @@ def test_failing_job_records_its_reason_and_timeline(cluster):
         State.RUNNER_STARTED,
         State.FAILED,
     ]
-    assert "exit code: 1" in cluster.coordinator.store.timeline("1")[-1].detail
+    assert cluster.coordinator.store.timeline("1")[-1].detail == "exit code 1"  # the runner's
 
 
 def test_jit_config_failure_is_reported_and_no_offer_is_sent(cluster):

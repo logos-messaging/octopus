@@ -345,7 +345,7 @@ def assert_explained(s, reason, detail_part, job_id="1001"):
 def test_runner_side_failures(system, reason, detail):
     s = system(runner_result=RunResult(1, reason, detail, 0.1))
     s.deliver()
-    assert_explained(s, reason, "exit code: 1")
+    assert_explained(s, reason, detail)  # the runner's detail, not just the exit code
     assert wait_for(lambda: (st := s.coordinator.logs.state("1001")) is not None and st.complete)
     assert explain(s)["log"]["tail"] == LOG  # the log of the failed job is kept
 

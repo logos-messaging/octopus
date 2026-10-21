@@ -215,19 +215,26 @@ class RunnerAgent:
         self._status(
             offer, JobStatus(job_id=offer.job_id, runner_id=self.runner_id, state="runner-started")
         )
-        streamer = self._open_log(offer)
+        completed: list[RunnerMarker] = []
+        streamer = self._open_log(offer, completed.append)
         try:
             result = manager.run_job(
                 offer.job_id,
                 offer.jit_config.get_secret_value(),
                 on_output=streamer.write if streamer is not None else None,
             )
+            reason, detail = result.failure, result.detail or None
+            # actions/runner exits 0 when a job fails, so its console result decides.
+            if reason is None and completed and completed[-1].result != "Succeeded":
+                reason = FailureReason.JOB_FAILED
+                detail = f"job {completed[-1].name} completed with result: {completed[-1].result}"
             final = JobStatus(
                 job_id=offer.job_id,
                 runner_id=self.runner_id,
                 state="finished",
                 exit_code=result.exit_code,
-                reason=result.failure,
+                reason=reason,
+                detail=detail,
             )
         except Exception:
             log.exception("could not run job: job: %s", offer.job_id)
@@ -249,16 +256,21 @@ class RunnerAgent:
 
     # logs
 
-    def _open_log(self, offer: JobOffer) -> LogStreamer | None:
+    def _open_log(
+        self, offer: JobOffer, on_completed: Callable[[RunnerMarker], None]
+    ) -> LogStreamer | None:
         """Start streaming the job's output. Logs are best-effort: a failure here is
-        reported and the job runs without them."""
+        reported and the job runs without them. `on_completed` gets the runner's
+        "Job <name> completed with result: <result>" markers."""
         pubkey = self._config.trusted_coordinators().get(offer.coordinator_id)
         if pubkey is None or self._key is None:
             log.warning("no log stream: unknown coordinator: job: %s", offer.job_id)
             return None
 
         def on_marker(marker: RunnerMarker) -> None:
-            if marker.kind == "job-started":
+            if marker.kind == "job-completed":
+                on_completed(marker)
+            elif marker.kind == "job-started":
                 self._status(
                     offer,
                     JobStatus(
