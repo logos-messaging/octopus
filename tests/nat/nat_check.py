@@ -8,6 +8,7 @@ the sender keeps publishing until the receiver confirms through /shared/done.
 import base64
 import json
 import os
+import socket
 import sys
 import time
 
@@ -32,7 +33,10 @@ def run_coordinator() -> None:
         config.coordinator_config(os.environ["OCTOPUS_PUBLIC_IP"])
     ).unwrap()
     addrs = node.get_node_info("MyMultiaddresses").unwrap().split(",")
-    entry = next(a for a in addrs if "/tcp/" in a)
+    tcp = next(a for a in addrs if "/tcp/" in a)
+    # Only /tcp/<port>/p2p/<id>: the announced IP is on the public network, which the runners
+    # cannot reach. Each runner adds the coordinator's address on its own network.
+    entry = tcp[tcp.index("/tcp/") :]
     # The relay node must be subscribed to the topic to forward it between the runners.
     node.subscribe_content_topic(run_topic(entry)[0]).unwrap()
     os.makedirs("/shared", exist_ok=True)
@@ -56,6 +60,10 @@ def say(msg: str) -> None:
 
 def run_runner() -> None:
     entry = wait_entry()
+    # libp2p resolves /dns4 names with public DNS, unreachable from an internal network, so
+    # resolve the coordinator with Docker's DNS.
+    host = socket.gethostbyname(os.environ["COORDINATOR_HOST"])
+    dial = f"/ip4/{host}{entry}"
     topic, expected = run_topic(entry)
     got = []
 
@@ -65,10 +73,10 @@ def run_runner() -> None:
             got.append(base64.b64decode(e["message"]["payload"]))
 
     node = ld.NodeWrapper.create_and_start(
-        config.runner_config([entry]), event_cb=on_event
+        config.runner_config([dial]), event_cb=on_event
     ).unwrap()
     node.subscribe_content_topic(topic).unwrap()
-    say(f"started, entry: {entry}")
+    say(f"started, entry: {dial}")
     time.sleep(10)
     if ROLE == "sender":
         payload = base64.b64encode(expected).decode()
