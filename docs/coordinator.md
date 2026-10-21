@@ -51,7 +51,9 @@ Exit codes: 1 already running, 2 usage, 3 bad settings, 4 network, library or po
    the App, write access with a token), retrying 3 times. If GitHub cannot answer, the job
    fails closed as `policy-rejected` with the error in its timeline.
 3. The scheduler offers the job to an idle matching runner, with a just-in-time runner
-   config, over the encrypted job channel, and listens for its log.
+   config, over the encrypted job channel, and listens for its log. If all matching
+   runners are busy, the job waits. GitHub keeps a job for a self-hosted runner in the
+   queue for up to 24 hours, so the job waits as long, then fails as `no-idle-runner`.
 4. The runner's statuses and log come back; the job ends `finished` or `failed` with a
    reason.
 
