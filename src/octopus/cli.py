@@ -128,6 +128,9 @@ def _inspector(data_dir: Path | None):
         raise _fail(f"{e} (run this on the coordinator host, or pass --data-dir)", EXIT_BAD_CONFIG) from e
 
 
+# The node's own state (reliable channels), inside the data dir of each role.
+NODE_DIR = "node"
+
 EXIT_USAGE = 2
 EXIT_BAD_CONFIG = 3
 EXIT_TRANSPORT = 4
@@ -298,7 +301,7 @@ def runner_start(
     if running:
         raise _fail(f"already running: pid: {running['pid']}", 1)
 
-    transport = LogosTransport(settings.node_config())
+    transport = LogosTransport(settings.node_config(data_dir / NODE_DIR))
     agent = RunnerAgent(settings, allowlist, transport, data_dir=data_dir)
     try:
         agent.start()
@@ -451,7 +454,7 @@ def coordinator_start(
     if running:
         raise _fail(f"already running: pid: {running['pid']}", 1)
     github = _github_client(config)
-    transport = LogosTransport(config.node_config())
+    transport = LogosTransport(config.node_config(directory / NODE_DIR))
     coordinator = Coordinator(config, transport, github, directory)
     try:
         coordinator.start()

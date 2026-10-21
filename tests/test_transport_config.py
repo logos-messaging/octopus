@@ -1,3 +1,5 @@
+import os
+
 import pytest
 
 from octopus.transport import config
@@ -37,3 +39,73 @@ def test_from_env():
     assert c["messagingOverrides"]["nat"] == "extip:198.51.100.1"
     with pytest.raises(ValueError, match="role"):
         config.from_env("nope", {})
+
+
+def test_storage_path_is_set_only_when_given(tmp_path):
+    assert "local-storage-path" not in config.runner_config()["messagingOverrides"]
+    o = config.runner_config(storage_path=tmp_path / "node")["messagingOverrides"]
+    assert o["local-storage-path"] == str(tmp_path / "node")
+    c = config.coordinator_config("203.0.113.7", storage_path=tmp_path / "c")
+    assert c["messagingOverrides"]["local-storage-path"] == str(tmp_path / "c")
+
+
+def _capture_node_config(monkeypatch) -> list[dict]:
+    """Replace LogosTransport: record the node config, then fail the start."""
+    from octopus.transport import logos
+
+    seen: list[dict] = []
+
+    class FakeTransport:
+        def __init__(self, cfg):
+            seen.append(cfg)
+
+    def fail_start(self, *a, **kw):
+        raise logos.LogosLibraryError("no library in this test")
+
+    monkeypatch.setattr(logos, "LogosTransport", FakeTransport)
+    monkeypatch.setattr("octopus.agent.runner_agent.RunnerAgent.start", fail_start)
+    monkeypatch.setattr("octopus.coordinator.service.Coordinator.start", fail_start)
+    return seen
+
+
+def test_runner_start_keeps_node_state_in_its_data_dir(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from octopus.cli import app
+    from octopus.crypto import encode_public_key, generate_private_key
+
+    seen = _capture_node_config(monkeypatch)
+    monkeypatch.setenv("OCTOPUS_DATA_DIR", str(tmp_path / "data"))
+    cfg = str(tmp_path / "runner.json")
+    key = encode_public_key(generate_private_key().public_key())
+    cli = CliRunner()
+    assert (
+        cli.invoke(app, ["runner", "setup", "--config", cfg, "--coordinator", key]).exit_code == 0
+    )
+    assert cli.invoke(app, ["runner", "allow", "acme/app", "--config", cfg]).exit_code == 0
+    result = cli.invoke(app, ["runner", "start", "--config", cfg])
+    assert result.exit_code == 4, result.output
+    path = seen[0]["messagingOverrides"]["local-storage-path"]
+    assert path == str(tmp_path / "data" / "node")
+
+
+def test_coordinator_start_keeps_node_state_in_its_data_dir(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from octopus.cli import app
+
+    seen = _capture_node_config(monkeypatch)
+    env_file = tmp_path / "coordinator.env"
+    env_file.write_text(
+        "OCTOPUS_WEBHOOK_SECRET=s\nOCTOPUS_GITHUB_TOKEN=t\nOCTOPUS_GITHUB_REPO=acme/app\n"
+        "OCTOPUS_PUBLIC_IP=203.0.113.7\n"
+    )
+    for k in [k for k in os.environ if k.startswith("OCTOPUS_")]:
+        monkeypatch.delenv(k)
+    data = tmp_path / "data"
+    result = CliRunner().invoke(
+        app, ["coordinator", "start", "--env-file", str(env_file), "--data-dir", str(data)]
+    )
+    assert result.exit_code == 4, result.output
+    path = seen[0]["messagingOverrides"]["local-storage-path"]
+    assert path == str(data / "coordinator" / "node")

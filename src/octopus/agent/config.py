@@ -64,8 +64,10 @@ class RunnerConfig:
     def trusted_coordinators(self) -> dict[str, str]:
         return {coordinator_id(k): k for k in self.coordinators}
 
-    def node_config(self) -> dict:
-        return runner_config(self.entry_nodes, tcp_port=self.tcp_port, nat=self.nat)
+    def node_config(self, storage_path: Path | None = None) -> dict:
+        return runner_config(
+            self.entry_nodes, tcp_port=self.tcp_port, nat=self.nat, storage_path=storage_path
+        )
 
     @classmethod
     def load(cls, path: Path) -> RunnerConfig:
