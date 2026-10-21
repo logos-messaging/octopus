@@ -23,9 +23,17 @@ class Clock:
 class Node:
     def __init__(self, cid, key, peers, bus, clock, config):
         self.adopted: list[str] = []
+        self.cancelled: list[str] = []
         self.transport = MemoryTransport(bus)
         self.cluster = CoordinatorCluster(
-            cid, key, peers, self.transport, lambda j: self.adopted.append(j.job_id), clock, config
+            cid,
+            key,
+            peers,
+            self.transport,
+            lambda j: self.adopted.append(j.job_id),
+            clock,
+            config,
+            cancel=lambda job_id, detail: self.cancelled.append(job_id),
         )
 
 
@@ -145,3 +153,52 @@ def test_authentic_cancel_from_a_peer_drops_the_replica_but_a_stranger_cannot(cl
     assert "1" in nodes[1].cluster.pending()
     send(bus, "c0", keys["c0"], clock, kind="done", job_id="1")
     assert nodes[1].cluster.pending() == []
+
+
+def gossip(bus):
+    """The kinds of all coordinator messages sent from now on."""
+    kinds: list[str] = []
+    MemoryTransport(bus).subscribe(
+        COORD_TOPIC, lambda topic, payload: kinds.append(CoordMessage.model_validate_json(payload).kind)
+    )
+    return kinds
+
+
+def test_cancel_received_by_a_peer_reaches_the_owner(clock):
+    _, _, nodes = make(clock)
+    nodes[0].cluster.submit(job(1))
+    owner = next(n for n in nodes if n.adopted)
+    other = next(n for n in nodes if n is not owner)
+    other.cluster.cancel("1", "GitHub completed the job before it ran: cancelled")
+    assert owner.cancelled == ["1"]
+    assert all(n.cluster.pending() == [] for n in nodes)
+    clock.t += 10  # the owner dies: nobody takes the cancelled job over
+    for n in nodes:
+        if n is not owner:
+            n.cluster.tick()
+    assert sum(len(n.adopted) for n in nodes) == 1
+
+
+def test_cancel_before_the_job_is_announced_wins(clock):
+    _, _, nodes = make(clock)
+    nodes[1].cluster.cancel("1", "GitHub completed the job before it ran: cancelled")
+    nodes[0].cluster.submit(job(1))  # the queued webhook was slower than the completed one
+    assert all(n.adopted == [] and n.cluster.pending() == [] for n in nodes)
+
+
+def test_completion_of_a_job_that_ran_sends_no_cancel(clock):
+    bus, _, nodes = make(clock)
+    nodes[0].cluster.submit(job(1))
+    owner = next(n for n in nodes if n.adopted)
+    owner.cluster.accepted("1")
+    kinds = gossip(bus)
+    for n in nodes:
+        n.cluster.cancel("1", "GitHub completed the job before it ran: success")
+    assert "cancelled" not in kinds
+
+
+def test_a_stranger_cannot_cancel(clock):
+    bus, _, nodes = make(clock, n=2)
+    nodes[0].cluster.submit(job(1))
+    send(bus, "mallory", generate_signing_key(), clock, kind="cancelled", job_id="1")
+    assert all(n.cancelled == [] and n.cluster.pending() == ["1"] for n in nodes)
