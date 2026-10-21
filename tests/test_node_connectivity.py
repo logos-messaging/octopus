@@ -4,6 +4,7 @@ import base64
 import json
 import socket
 import time
+import uuid
 
 import pytest
 
@@ -22,7 +23,11 @@ def test_runner_receives_coordinator_message(tmp_path):
     from octopus.transport.logos import _load_bindings
 
     ld = _load_bindings()
-    topic = "/octopus/1/connectivity/proto"
+    # The nodes also join the public network, where other runs of this test can publish at the
+    # same time. A topic and a payload of this run only keep their messages apart.
+    run = uuid.uuid4().hex
+    topic = f"/octopus/1/connectivity-{run[:12]}/proto"
+    payload = f"hi {run}".encode()
     received = []
 
     def on_event(ret, msg):
@@ -44,12 +49,12 @@ def test_runner_receives_coordinator_message(tmp_path):
         coord.subscribe_content_topic(topic).unwrap()
         time.sleep(8)
         coord.send_message(
-            {"contentTopic": topic, "payload": base64.b64encode(b"hi").decode(), "ephemeral": False}
+            {"contentTopic": topic, "payload": base64.b64encode(payload).decode(), "ephemeral": False}
         ).unwrap()
         deadline = time.time() + 20
         while not received and time.time() < deadline:
             time.sleep(0.5)
-        assert received == [b"hi"]
+        assert received == [payload]
     finally:
         if runner is not None:
             runner.stop_and_destroy()
