@@ -69,7 +69,7 @@ def logs(
 
     inspector = _inspector(data_dir)
     try:
-        if inspector.jobs.get(job_id) is None:
+        if inspector.jobs.get(inspector.jobs.resolve(job_id)) is None:
             raise _fail(f"unknown job: {job_id}", 1)
         if follow:
             try:

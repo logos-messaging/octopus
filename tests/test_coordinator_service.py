@@ -50,6 +50,7 @@ class FakeGitHub:
         self.runs_status = 200
         self.jit_status = 201
         self.registered = 0
+        self.runner_names = []
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -65,6 +66,7 @@ class FakeGitHub:
             if self.jit_status != 201:
                 return httpx.Response(self.jit_status, json={"message": "Resource not accessible"})
             self.registered += 1
+            self.runner_names.append(json.loads(request.content)["name"])
             return httpx.Response(
                 201,
                 json={"runner": {"id": self.registered}, "encoded_jit_config": "JIT-CONFIG-xyz"},
@@ -250,6 +252,37 @@ def test_cli_inspects_a_running_coordinator(system):
     assert status["state"]["runners_online"] == 1 and status["jobs"] == {"finished": 1}
     plain = cli("coordinator", "status", "--data-dir", data_dir)
     assert plain.exit_code == 0 and f"--coordinator {s.coordinator.public_key}" in plain.output
+
+
+def test_job_that_ran_on_another_jobs_runner_keeps_its_own_records(system):
+    """GitHub gives a job to any idle runner, not the one made for it (issue #58)."""
+    s = system()
+    s.deliver()
+    s.wait_state(State.FINISHED)
+    assert wait_for(lambda: (st := s.coordinator.logs.state("1001")) is not None and st.complete)
+    made_for_1001 = s.github.runner_names[0]
+    data_dir = str(s.tmp_path / "data")
+
+    # A runner that was made for no job of ours, or for the job itself, changes nothing.
+    assert s.deliver(1001, "in_progress", runner_name=made_for_1001).status_code == 202
+    assert s.deliver(3003, "in_progress", runner_name="GitHub Actions 5").status_code == 202
+    assert s.coordinator.jobs.resolve("1001") == "1001"
+    assert s.coordinator.jobs.resolve("3003") == "3003"
+
+    # GitHub job 2002 ran on the runner that Octopus made for job 1001.
+    assert s.deliver(2002, "in_progress", runner_name=made_for_1001).status_code == 202
+    assert wait_for(lambda: s.coordinator.jobs.resolve("2002") == "1001")
+
+    inspector = Inspector(s.tmp_path / "data" / "coordinator")
+    try:
+        data = inspector.explain("2002")
+        assert data["id"] == "2002" and data["state"] == "finished" and data["step"] == "build"
+        assert [r["id"] for r in inspector.list_jobs()] == ["2002"]
+        assert "".join(c.data for c in inspector.log_chunks("2002")).splitlines() == LOG
+    finally:
+        inspector.close()
+    assert cli("logs", "2002", "--data-dir", data_dir).output.splitlines() == LOG
+    assert "state    finished" in cli("explain", "2002", "--data-dir", data_dir).output
 
 
 def test_duplicate_and_unsigned_webhooks(system):

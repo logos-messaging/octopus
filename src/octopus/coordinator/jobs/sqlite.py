@@ -27,6 +27,11 @@ CREATE TABLE IF NOT EXISTS events (
   actor TEXT NOT NULL, state TEXT NOT NULL, detail TEXT NOT NULL, reason TEXT);
 CREATE INDEX IF NOT EXISTS events_job ON events(job_id, seq);
 CREATE INDEX IF NOT EXISTS jobs_updated ON jobs(updated_at);
+CREATE TABLE IF NOT EXISTS runner_jobs (
+  runner_name TEXT PRIMARY KEY, job_id TEXT NOT NULL, created_at REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS job_alias (
+  job_id TEXT PRIMARY KEY, data_id TEXT NOT NULL, created_at REAL NOT NULL);
+CREATE INDEX IF NOT EXISTS job_alias_data ON job_alias(data_id);
 """
 
 
@@ -197,7 +202,47 @@ class SqliteJobStore(JobStore):
             for job_id in ids:
                 self._db.execute("DELETE FROM events WHERE job_id=?", (job_id,))
                 self._db.execute("DELETE FROM jobs WHERE id=?", (job_id,))
+                self._db.execute("DELETE FROM runner_jobs WHERE job_id=?", (job_id,))
+                self._db.execute("DELETE FROM job_alias WHERE job_id=? OR data_id=?", (job_id, job_id))
         return len(ids)
+
+    def record_runner(self, runner_name: str, job_id: str) -> None:
+        with self._lock, self._db:
+            self._db.execute(
+                "INSERT OR REPLACE INTO runner_jobs(runner_name, job_id, created_at) VALUES (?,?,?)",
+                (runner_name, job_id, self._clock()),
+            )
+
+    def job_for_runner(self, runner_name: str) -> str | None:
+        row = self._query_one("SELECT job_id FROM runner_jobs WHERE runner_name=?", runner_name)
+        return row[0] if row else None
+
+    def set_alias(self, job_id: str, data_id: str) -> None:
+        with self._lock, self._db:
+            if job_id == data_id:
+                self._db.execute("DELETE FROM job_alias WHERE job_id=?", (job_id,))
+            else:
+                self._db.execute(
+                    "INSERT OR REPLACE INTO job_alias(job_id, data_id, created_at) VALUES (?,?,?)",
+                    (job_id, data_id, self._clock()),
+                )
+
+    def resolve(self, job_id: str) -> str:
+        row = self._query_one("SELECT data_id FROM job_alias WHERE job_id=?", job_id)
+        return row[0] if row else job_id
+
+    def viewed_as(self, data_id: str) -> str:
+        row = self._query_one(
+            "SELECT job_id FROM job_alias WHERE data_id=? ORDER BY created_at LIMIT 1", data_id
+        )
+        return row[0] if row else data_id
+
+    def _query_one(self, sql: str, arg: str):
+        with self._lock:
+            try:
+                return self._db.execute(sql, (arg,)).fetchone()
+            except sqlite3.OperationalError:
+                return None  # a read-only database from before these tables existed
 
     def _add_event(self, job_id, ts, actor, state, detail, reason) -> None:
         self._db.execute(
