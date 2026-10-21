@@ -14,7 +14,7 @@ import typer
 
 from .github.setup import Check, Status
 
-ROLES = ("runner", "coordinator")
+ROLES = ("runner", "coordinator", "manual")
 
 
 def _show(check: Check) -> Check:
@@ -179,6 +179,73 @@ def init_runner(config: Path | None) -> list[Check]:
     return checks
 
 
+# --- manual runner --------------------------------------------------------------------
+
+
+def _manual_target():
+    from .agent import manual
+
+    while True:
+        text = _ask("Repo (owner/name) or org that this runner serves")
+        if not text:
+            return None
+        try:
+            return manual.parse_target(text)
+        except manual.ManualRunnerError as e:
+            typer.echo(f"error: {e}")
+
+
+def _manual_register(base: Path, target) -> tuple[Check, Path | None]:
+    from .agent import manual
+    from .cli_manual import ask_token
+
+    try:
+        directory = manual.prepare(base, target)
+        if manual.is_configured(directory):
+            return Check("registration", Status.OK, f"already registered: {target.url}"), directory
+        raw = _ask("Extra labels, comma separated (empty: only octopus)")
+        labels = [*manual.DEFAULT_LABELS, *[x.strip() for x in raw.split(",") if x.strip()]]
+        name = _ask("Runner name in GitHub", manual.default_name())
+        token = ask_token("registration", target.new_runner_page, manual.TOKEN_ENV)
+        manual.configure(directory, target, token, name=name, labels=labels)
+    except manual.ManualRunnerError as e:
+        return Check("registration", Status.FAIL, str(e)), None
+    detail = f"{name} for {target.url} (labels: self-hosted, {', '.join(labels)})"
+    return Check("registration", Status.CHANGED, detail), directory
+
+
+def init_manual_runner(data_dir: Path | None) -> list[Check]:
+    """Register this machine as a plain GitHub runner with a one-hour token, then run it."""
+    from .agent import manual
+    from .cli_manual import data_dir_or_default
+
+    base = data_dir_or_default(data_dir)
+    typer.echo(
+        "A manual runner is a plain GitHub runner: no coordinator, no scheduling and no Octopus\n"
+        "trust policy. Any workflow in the target that matches its labels runs on this machine.\n"
+        "See docs/manual-runner.md."
+    )
+    target = _manual_target()
+    if target is None:
+        return [_show(Check("target", Status.SKIPPED, "nothing to register"))]
+    checks = [_show(Check("target", Status.OK, target.url))]
+    check, directory = _manual_register(base, target)
+    checks.append(_show(check))
+    if directory is None:
+        return checks
+    if not typer.confirm("Run it now (foreground, Ctrl-C to stop; it stays registered)?", default=True):
+        typer.echo("next: run octopus init --role manual again to start it")
+        typer.echo(f"      octopus runner unregister-manual {target.name} removes it")
+        return checks
+    try:
+        code = manual.start(directory)
+    except manual.ManualRunnerError as e:
+        return [*checks, _show(Check("runner", Status.FAIL, str(e)))]
+    status = Status.OK if code == 0 else Status.FAIL
+    checks.append(_show(Check("runner", status, f"exited with code: {code}")))
+    return checks
+
+
 # --- coordinator ----------------------------------------------------------------------
 
 
@@ -323,7 +390,9 @@ def init_coordinator(env_file: Path, data_dir: Path | None, api_url: str) -> lis
     return checks
 
 
-RoleOption = typer.Option(None, "--role", help="runner or coordinator (else asked).")
+RoleOption = typer.Option(
+    None, "--role", help="runner, coordinator or manual (a plain GitHub runner); else asked."
+)
 ConfigOption = typer.Option(
     None, "--config", help="Runner config file (default: the platform config dir)."
 )
@@ -347,9 +416,13 @@ def add_init(app: typer.Typer) -> None:
     ) -> None:
         """Set up this host as a runner or a coordinator, step by step. Safe to run again."""
         while role not in ROLES:
-            role = _ask("Role of this host: runner or coordinator").lower()
+            role = _ask(
+                "Role of this host: runner, coordinator or manual (a plain GitHub runner)"
+            ).lower()
         if role == "runner":
             checks = init_runner(config)
+        elif role == "manual":
+            checks = init_manual_runner(data_dir)
         else:
             checks = init_coordinator(env_file, data_dir, api_url)
         if any(c.failed for c in checks):
