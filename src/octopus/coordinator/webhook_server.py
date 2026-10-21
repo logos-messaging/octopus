@@ -7,6 +7,8 @@ to localhost by default for that reason.
 from __future__ import annotations
 
 import logging
+import socket
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 
@@ -17,6 +19,9 @@ log = logging.getLogger(__name__)
 DEFAULT_PATH = "/github/webhook"
 # Seconds a client may take to send its request; stops slow clients from holding threads.
 REQUEST_TIMEOUT_S = 10
+# How long, and how much, to read of a refused request before closing (see _drain_request).
+_DRAIN_SECONDS = 1.0
+_DRAIN_MAX_BYTES = 1 << 20
 
 
 class WebhookServer:
@@ -94,6 +99,29 @@ class _Handler(BaseHTTPRequestHandler):
             self.close_connection = True
         self.end_headers()
         self.wfile.write(data)
+        if status >= 400:
+            self._drain_request()
+
+    def _drain_request(self) -> None:
+        """Read what the client is still sending before the socket closes.
+
+        Closing with unread request bytes makes Windows reset the connection, and the reset can
+        discard the response the client has not read yet (httpx.ReadError). The wait is bounded
+        so a slow client cannot hold the thread.
+        """
+        try:
+            self.wfile.flush()
+            self.connection.shutdown(socket.SHUT_WR)
+            deadline = time.monotonic() + _DRAIN_SECONDS
+            self.connection.settimeout(_DRAIN_SECONDS)
+            drained = 0
+            while drained < _DRAIN_MAX_BYTES and time.monotonic() < deadline:
+                chunk = self.connection.recv(65536)
+                if not chunk:
+                    break
+                drained += len(chunk)
+        except OSError:
+            pass
 
     def log_message(self, format: str, *args: object) -> None:
         log.debug("%s %s", self.address_string(), format % args)
