@@ -26,6 +26,18 @@ cluster.clock.advance(3600)                         # expire presence without sl
 - Assert on `coordinator.job(id)` (state and `reason`) and `coordinator.store.timeline(id)`:
   that is what `octopus explain` prints.
 
-Not covered here: a real `liblogosdelivery` round trip (see the `needs_lib` tests in
-`tests/test_channel_integration.py`), the docker-compose NAT test (`tests/nat/`), and
-coordinator failover (#17).
+Not covered here, and tested elsewhere:
+
+- a real `liblogosdelivery` round trip: the `needs_lib` tests (`tests/test_node_connectivity.py`,
+  `tests/test_channel_integration.py`); CI job `needs_lib` runs them on Linux and macOS.
+- the NAT relay path: `tests/nat/` runs two runners on separate internal networks that can only
+  reach each other through the coordinator. CI job `nat` runs it; to run it by hand with a Linux
+  `liblogosdelivery.so`:
+
+  ```bash
+  LIB=path/to/liblogosdelivery.so docker compose -f tests/nat/docker-compose.yml up -d --build
+  docker wait "$(docker compose -f tests/nat/docker-compose.yml ps -aq runner_b)"   # 0 = relayed
+  docker compose -f tests/nat/docker-compose.yml down -v
+  ```
+
+Coordinator failover has in-process scenarios here (`test_coordinator_failover_*`).

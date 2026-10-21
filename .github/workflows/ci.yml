@@ -75,3 +75,49 @@ jobs:
           cache-dependency-path: pyproject.toml
       - run: pip install -e '.[dev,logos]'
       - run: pytest -m needs_lib
+
+      # The NAT job reuses this Linux build instead of compiling it again.
+      - name: Keep the Linux library for the NAT test
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: liblogosdelivery-linux
+          path: vendor/logos-delivery-python-bindings/lib/liblogosdelivery.so
+          retention-days: 3
+          if-no-files-found: error
+
+  # Two runners on separate internal networks can only reach each other through the
+  # coordinator (tests/nat). Passes when the receiver gets the sender's message.
+  nat:
+    name: nat relay (docker compose)
+    needs: lib
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    env:
+      LIB: nat-lib/liblogosdelivery.so
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: liblogosdelivery-linux
+          path: nat-lib
+      - name: Start the coordinator and both runners
+        run: docker compose -f tests/nat/docker-compose.yml up -d --build
+      # runner_a exits as soon as it has sent, so --abort-on-container-exit would stop
+      # the receiver too: wait for the receiver alone.
+      - name: Wait for the receiver
+        run: |
+          code=$(timeout 400 docker wait "$(docker compose -f tests/nat/docker-compose.yml ps -aq runner_b)")
+          echo "receiver exit code: $code"
+          test "$code" = "0"
+      - name: Container logs
+        if: always()
+        run: |
+          docker compose -f tests/nat/docker-compose.yml logs --no-color > nat.log
+          echo "--- progress"; grep NATCHECK nat.log || true
+          echo "--- full log"; cat nat.log
+      - name: Tear down
+        if: always()
+        run: docker compose -f tests/nat/docker-compose.yml down -v
