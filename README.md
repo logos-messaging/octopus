@@ -32,6 +32,7 @@ public runner pool.
 ## One CLI, two roles
 
 ```
+octopus init                              # guided setup of a runner or coordinator host
 octopus runner setup|allow|start|status|stop   # on runner hosts (laptops)
 octopus coordinator start|status          # on coordinator hosts (VPS)
 octopus jobs [--failed]                   # list jobs
@@ -41,6 +42,8 @@ octopus github setup|teardown             # one repo, token-based (docs/github-s
 ```
 
 ## Quickstart: lend a laptop
+
+`octopus init` asks for each setting below in turn and can install the service. Or step by step:
 
 ```bash
 octopus runner setup --coordinator <coordinator-public-key>   # who may send you jobs
