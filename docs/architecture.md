@@ -7,6 +7,9 @@
 ## GitHub integration
 A GitHub App receives `workflow_job` webhooks (`queued`). The coordinator picks an idle runner, requests an ephemeral JIT runner config (`POST /repos/{o}/{r}/actions/runners/generate-jitconfig`, label `octopus`) and sends it over the encrypted job channel to that runner only. The runner starts `actions/runner --jitconfig`; it runs one job and exits. Workflows opt in with `runs-on: [self-hosted, octopus]`. Setup and webhook handling: [github-app.md](github-app.md). A single repo can instead be set up with a token and no App: [github-setup.md](github-setup.md).
 
+## OIDC pick mode (no GitHub credential)
+With `OCTOPUS_OIDC_AUDIENCE` set the coordinator also serves `POST /pick` ([oidc-pick.md](oidc-pick.md)). `octopus.oidc.OidcVerifier` checks a GitHub Actions OIDC token against GitHub's public JWKS (issuer, audience, expiry, one-time `jti`); `coordinator.pick.PickService` applies `TrustPolicy` to its claims; `coordinator.picker.Picker` reserves the least recently picked runner from the `Registry` that announces an `octopus-<name>` label and answers with that label. Reservations end on the `workflow_job` `completed` webhook for that label and run, or by TTL. Runners are plain manual runners ([manual-runner.md](manual-runner.md)) that only publish presence (`agent/manual_presence.py`). No GitHub token or App key is needed, so no scheduler or JIT runner exists in this mode.
+
 ## Trust policy
 Only trusted internal PRs: the repo or org is on the allowlist, the PR branch is in the same repo (no forks), the sender is an org member (with token auth, `octopus github setup`: has write access to the repo) and the trigger is `push` or `pull_request` (`pull_request_target`, `workflow_run` and the like run with base-repo secrets and can check out attacker-controlled code). An empty allowlist rejects everything; names compare case-insensitively.
 

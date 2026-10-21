@@ -62,6 +62,9 @@ logos-delivery gossip is visible to its participants. Peers and coordinators see
 ### 10. Availability and abuse
 Malformed or undecryptable messages are dropped. A member can queue many jobs to keep lenders' machines busy; `--max-jobs` bounds concurrency per runner and the maximum job duration bounds time. Rate limiting of peers and members is not implemented.
 
+### 11. OIDC pick mode
+Pick mode ([oidc-pick.md](oidc-pick.md)) stores no GitHub credential on the coordinator: a stolen coordinator host yields no way to act on GitHub. Its costs: runners are persistent and run jobs as the owner's user, so one job can affect the next (no one-use isolation); GitHub assigns a job by label, so a writer of an allowed repo can target a runner label directly and skip the pick (the boundary is who can push to the allowed repos); `/pick` is a public endpoint, guarded by the OIDC signature, audience, expiry and one-time `jti`, and by claims-based trust (repo, event, workflow in the same repo); fork PRs get no OIDC token and cannot ask. A pick can reserve a runner for up to 10 minutes without using it, so an allowed repo's writer can hold runners; there is no per-repo rate limit.
+
 ## Trust policy
 Only jobs that pass every check run: repo or org on the runner's allowlist, PR branch in the same repo, sender is an org member (with token auth: can push to the repo), trigger is `push` or `pull_request`. Checked by the coordinator before offering and again by the runner before accepting. Everything unknown fails closed (no context, no allowlist, unreadable config). Widen the allowed events only knowingly, via `TrustPolicy(allowed_events=...)`.
 

@@ -32,6 +32,10 @@ it first (below).
 `self-hosted`, the OS and the arch labels are added by GitHub, `octopus` by Octopus. The runner tree
 lives in `<data dir>/manual-runner/<owner>__<repo>/` (`--data-dir` picks another data dir).
 
+The unique label `octopus-<name>` (the runner name, prefixed when needed) is also added, and saved in the runner tree.
+With `--announce` the runner publishes it in presence for a coordinator in OIDC pick mode: see
+[oidc-pick.md](oidc-pick.md).
+
 A workflow uses it with `runs-on: [self-hosted, octopus]` (add the OS label, such as `macOS`, to
 pick this machine).
 

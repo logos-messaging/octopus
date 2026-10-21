@@ -36,6 +36,7 @@ octopus init                              # guided setup of a runner or coordina
 octopus runner setup|allow|start|status|stop   # on runner hosts (laptops)
 octopus init --role manual                 # plain GitHub runner, one-hour token (docs/manual-runner.md)
 octopus runner unregister-manual <repo>    # remove that runner
+octopus init --role manual --announce      # also offer it to an OIDC-pick coordinator (docs/oidc-pick.md)
 octopus coordinator start|status          # on coordinator hosts (VPS)
 octopus jobs [--failed]                   # list jobs
 octopus logs <job> [-f]                   # job logs
@@ -139,6 +140,7 @@ Run the same checks locally with `ruff check . && pytest`.
 - `docs/coordinator-ops.md`: running a coordinator in production (Docker/systemd, TLS, metrics, rotation); `deploy/` has the files
 - `docs/e2e.md`: the nightly end-to-end test against a real GitHub repo, and how to set it up
 - `docs/manual-runner.md`: a plain GitHub runner on a laptop, no coordinator
+- `docs/oidc-pick.md`: OIDC pick mode, a coordinator with no GitHub credential
 - `docs/threat-model.md`: what Octopus protects against and what it does not; `CONTRIBUTING.md`: how to contribute
 
 ## License
