@@ -23,6 +23,11 @@ from pathlib import Path
 import httpx
 
 from ..crypto import encode_public_key, load_or_create_private_key, node_id
+from ..crypto.signing import (
+    decode_signing_public,
+    encode_signing_public,
+    load_or_create_signing_key,
+)
 from ..github.app import GitHubApiError, GitHubClient
 from ..github.runners import JitRunnerError, JitRunners, make_jit_provider
 from ..github.trust import resolve_trust_inputs
@@ -30,6 +35,7 @@ from ..github.webhooks import WebhookReceiver, WorkflowJobEvent
 from ..policy import TrustPolicy
 from ..proto import FailureReason
 from ..transport import ChannelTransport
+from .cluster import ClusterConfig, CoordinatorCluster, to_coord_job, to_job_context
 from .config import CoordinatorConfig
 from .jobs import SqliteJobStore, State
 from .logs import LogCollector, LogStore
@@ -41,6 +47,7 @@ from .webhook_server import WebhookServer
 log = logging.getLogger(__name__)
 
 KEY_FILE = "coordinator.key"
+SIGNING_KEY_FILE = "cluster.key"
 JOBS_DB = "jobs.db"
 LOGS_DB = "logs.db"
 STATE_FILE = "coordinator.state.json"
@@ -49,6 +56,7 @@ QUEUE_SIZE = 1000
 TRUST_ATTEMPTS = 3
 # How often the state file (runners online, for `coordinator status`) is refreshed.
 MAINTENANCE_S = 10.0
+CLUSTER_TICK_S = 1.0
 SWEEP_EVERY_S = 300.0
 PURGE_EVERY_S = 24 * 3600.0
 # Repos seen within this long get their orphaned runners swept.
@@ -83,6 +91,7 @@ class Coordinator:
         directory: Path,
         *,
         scheduler_config: SchedulerConfig | None = None,
+        cluster_config: ClusterConfig | None = None,
         sleep: Callable[[float], None] = time.sleep,
         retry_delay_s: float = 2.0,
     ) -> None:
@@ -91,6 +100,7 @@ class Coordinator:
         self._github = github
         self._dir = directory
         self._scheduler_config = scheduler_config or SchedulerConfig()
+        self._cluster_config = cluster_config
         self._sleep = sleep
         self._retry_delay_s = retry_delay_s
         self._queue: queue.Queue = queue.Queue(maxsize=QUEUE_SIZE)
@@ -104,6 +114,8 @@ class Coordinator:
         self._last_purge = 0.0
         self.coordinator_id = ""
         self.public_key = ""
+        self.signing_public = ""
+        self.cluster: CoordinatorCluster | None = None
         self.jobs: SqliteJobStore | None = None
         self.logs: LogStore | None = None
         self.registry: Registry | None = None
@@ -119,6 +131,8 @@ class Coordinator:
         key = load_or_create_private_key(self._dir / KEY_FILE)
         self.coordinator_id = node_id(key.public_key())
         self.public_key = encode_public_key(key.public_key())
+        signing_key = load_or_create_signing_key(self._dir / SIGNING_KEY_FILE)
+        self.signing_public = encode_signing_public(signing_key.public_key())
         self.jobs = SqliteJobStore(str(self._dir / JOBS_DB))
         self.logs = LogStore(str(self._dir / LOGS_DB))
         try:
@@ -133,6 +147,15 @@ class Coordinator:
                 allowed_repos=frozenset(self._config.allowed_repos),
                 allowed_orgs=frozenset(self._config.allowed_orgs),
             )
+            if self._config.peers:
+                self.cluster = CoordinatorCluster(
+                    self.coordinator_id,
+                    signing_key,
+                    {cid: decode_signing_public(pub) for cid, pub in self._config.peers.items()},
+                    self._transport,
+                    self._adopt,
+                    config=self._cluster_config,
+                )
             self.scheduler = Scheduler(
                 self.registry,
                 self.jobs,
@@ -141,8 +164,12 @@ class Coordinator:
                 config=self._scheduler_config,
                 policy=policy,
                 logs=self.collector,
+                events=self.cluster,
             )
             self.scheduler.start()
+            if self.cluster is not None:
+                self.cluster.start()
+                self._spawn(self._cluster_ticker, "octopus-cluster")
             self._spawn(self._trust_worker, "octopus-trust")
             receiver = WebhookReceiver(
                 [s.get_secret_value().encode() for s in self._config.webhook_secrets],
@@ -177,7 +204,7 @@ class Coordinator:
             pass
         for thread in self._threads:
             thread.join(timeout=10)
-        for part in (self.scheduler, self.collector, self.registry):
+        for part in (self.cluster, self.scheduler, self.collector, self.registry):
             if part is not None:
                 try:
                     part.stop()
@@ -263,8 +290,25 @@ class Coordinator:
                 detail=f"could not check trust: {error}",
             )
             return
+        if self.cluster is not None:
+            # The owner among the live coordinators adopts it (maybe this one).
+            self.cluster.submit(to_coord_job(job_id, event.repo, list(event.labels), context))
+            return
         assert self.scheduler is not None
         self.scheduler.submit(job_id, event.repo, list(event.labels), context)
+
+    def _adopt(self, job) -> None:
+        """The cluster says this coordinator owns the job: queue it in the scheduler."""
+        assert self.scheduler is not None
+        self.scheduler.submit(job.job_id, job.repo, list(job.labels), to_job_context(job))
+
+    def _cluster_ticker(self) -> None:
+        while not self._stopping.wait(CLUSTER_TICK_S):
+            try:
+                assert self.cluster is not None
+                self.cluster.tick()
+            except Exception:
+                log.exception("cluster tick failed")
 
     def _on_status(self, status) -> None:
         if self.scheduler is not None:
@@ -321,6 +365,8 @@ class Coordinator:
             "pid": os.getpid(),
             "coordinator_id": self.coordinator_id,
             "public_key": self.public_key,
+            "cluster_key": self.signing_public,
+            "peers": sorted(self._config.peers),
             "webhook": f"http://{address[0]}:{address[1]}{self._config.webhook_path}"
             if address
             else "",
