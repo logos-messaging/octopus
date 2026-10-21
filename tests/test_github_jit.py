@@ -231,6 +231,11 @@ def test_runner_name_is_unique_per_runner_job_attempt():
     assert all(n.startswith("octopus-") for n in names)
 
 
+def test_runner_name_differs_for_jobs_of_one_push():
+    # Real ids of two jobs from one push: the first 8 digits are the same.
+    assert runner_name("r" * 16, "118982330267", 1) != runner_name("r" * 16, "118982330333", 1)
+
+
 def presence(runner_id="abcdef0123456789"):
     return Presence(runner_id=runner_id, os="linux", arch="x64", sent_at=T0)
 
@@ -251,7 +256,7 @@ def test_provider_returns_secret_and_names_runner(env):
     assert isinstance(jit, SecretStr) and jit.get_secret_value() == SECRET
     (req,) = env.api.calls("POST", "generate-jitconfig")
     body = json.loads(req.content)
-    assert body["name"] == "octopus-abcdef01-job-1234-0"
+    assert body["name"] == "octopus-abcdef01-job-12345678-0"
     assert body["labels"] == ["self-hosted", "octopus", "linux", "x64"]
 
 
