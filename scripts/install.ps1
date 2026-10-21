@@ -37,6 +37,6 @@ Octopus is installed. Next:
   octopus runner allow <org/repo>
   octopus runner install-service
 
-The native library (liblogosdelivery) is not bundled yet, and the logos-delivery
-Python bindings only load a Linux/macOS library today: see docs/install.md.
+The logos-delivery Python bindings only load a Linux/macOS library today, so
+`octopus lib install` has nothing to fetch on Windows: see docs/install.md.
 "@
