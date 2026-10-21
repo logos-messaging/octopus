@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 
 # Octopus always runs on the logos.test network (cluster, shards and fleet entry nodes).
 PRESET = "logos.test"
@@ -15,12 +16,18 @@ ROOT_KEY_ENV = "OCTOPUS_ROOT_KEY"
 RUNNER_DEFAULT_NAT = "none"
 
 
-def _base(tcp_port: int, entry_nodes: Sequence[str], nat: str | None) -> dict:
+def _base(
+    tcp_port: int, entry_nodes: Sequence[str], nat: str | None, storage_path: Path | None
+) -> dict:
     overrides: dict = {"tcp-port": tcp_port}
     if entry_nodes:
         overrides["entry-node"] = list(entry_nodes)
     if nat:
         overrides["nat"] = nat
+    if storage_path is not None:
+        # The node keeps the state of its reliable channels (SDS) there. The library's
+        # default is ./data in the working dir, which two processes can share.
+        overrides["local-storage-path"] = str(storage_path)
     return {"mode": "Core", "preset": PRESET, "messagingOverrides": overrides}
 
 
@@ -29,6 +36,7 @@ def coordinator_config(
     *,
     tcp_port: int = DEFAULT_TCP_PORT,
     entry_nodes: Sequence[str] = (),
+    storage_path: Path | None = None,
 ) -> dict:
     """A coordinator has a public IP and acts as entry node and relay for NAT'd runners.
 
@@ -37,7 +45,7 @@ def coordinator_config(
     """
     if not public_ip:
         raise ValueError("coordinator_config: public_ip is required")
-    return _base(tcp_port, entry_nodes, f"extip:{public_ip}")
+    return _base(tcp_port, entry_nodes, f"extip:{public_ip}", storage_path)
 
 
 def runner_config(
@@ -45,6 +53,7 @@ def runner_config(
     *,
     tcp_port: int = DEFAULT_TCP_PORT,
     nat: str | None = None,
+    storage_path: Path | None = None,
 ) -> dict:
     """A runner dials out, so a plain NAT works. `entry_nodes` are extra connections, added to the default fleet nodes.
 
@@ -52,7 +61,7 @@ def runner_config(
     default is "any", and its port-mapping service often crashes the node when it stops
     (#64). A runner does not need a port mapping, because the coordinators relay for it.
     """
-    return _base(tcp_port, entry_nodes, nat or RUNNER_DEFAULT_NAT)
+    return _base(tcp_port, entry_nodes, nat or RUNNER_DEFAULT_NAT, storage_path)
 
 
 def from_env(role: str, env: Mapping[str, str] | None = None) -> dict:

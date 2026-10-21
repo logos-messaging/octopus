@@ -40,7 +40,8 @@ writes the token-mode ones ([github-setup.md](github-setup.md)).
 
 Data lives in `$OCTOPUS_DATA_DIR/coordinator/` (`--data-dir` for another root): the node
 key `coordinator.key` (its public half is what runners trust, so keep the file), `jobs.db`,
-`logs.db` (SQLite, 30 days) and `coordinator.state.json` while running.
+`logs.db` (SQLite, 30 days), `node/` (the logos-delivery node's state of its reliable
+channels) and `coordinator.state.json` while running.
 
 Exit codes: 1 already running, 2 usage, 3 bad settings, 4 network, library or port failure.
 

@@ -171,9 +171,12 @@ class CoordinatorConfig:
         if not 0 < self.tcp_port < 65536:
             raise ConfigError(f"invalid {TCP_PORT_ENV}, expected 1-65535: {self.tcp_port}")
 
-    def node_config(self) -> dict:
+    def node_config(self, storage_path: Path | None = None) -> dict:
         return coordinator_config(
-            self.public_ip, tcp_port=self.tcp_port, entry_nodes=self.entry_nodes
+            self.public_ip,
+            tcp_port=self.tcp_port,
+            entry_nodes=self.entry_nodes,
+            storage_path=storage_path,
         )
 
 
