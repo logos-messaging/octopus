@@ -7,6 +7,7 @@ import typer
 
 from . import __version__
 from .cli_github import github_app
+from .cli_init import add_init
 from .cli_keys import add_coordinator_keygen, root_app
 from .cli_lib import lib_app
 
@@ -19,6 +20,7 @@ app.add_typer(github_app, name="github")
 app.add_typer(root_app, name="root")
 app.add_typer(lib_app, name="lib")
 add_coordinator_keygen(coordinator_app)
+add_init(app)
 
 
 @app.command()
