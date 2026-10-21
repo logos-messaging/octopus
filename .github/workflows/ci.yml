@@ -128,6 +128,8 @@ jobs:
     needs: lib
     runs-on: ubuntu-22.04
     timeout-minutes: 20
+    env:
+      LIB: nat-lib/liblogosdelivery.so
     steps:
       - uses: actions/checkout@v4
         with:
@@ -137,8 +139,6 @@ jobs:
           name: liblogosdelivery-linux
           path: nat-lib
       - name: Start the coordinator and both runners
-        env:
-          LIB: nat-lib/liblogosdelivery.so
         run: docker compose -f tests/nat/docker-compose.yml up -d --build
       # runner_a exits as soon as it has sent, so --abort-on-container-exit would stop
       # the receiver too: wait for the receiver alone.
@@ -149,11 +149,7 @@ jobs:
           test "$code" = "0"
       - name: Container logs
         if: always()
-        env:
-          LIB: nat-lib/liblogosdelivery.so
         run: docker compose -f tests/nat/docker-compose.yml logs --no-color
       - name: Tear down
         if: always()
-        env:
-          LIB: nat-lib/liblogosdelivery.so
         run: docker compose -f tests/nat/docker-compose.yml down -v
