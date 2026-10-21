@@ -160,7 +160,7 @@ class Coordinator:
                 self.registry,
                 self.jobs,
                 offers,
-                make_jit_provider(self.jit),
+                make_jit_provider(self.jit, self.jobs.record_runner),
                 config=self._scheduler_config,
                 policy=policy,
                 logs=self.collector,
@@ -244,6 +244,8 @@ class Coordinator:
                 self._queue.put_nowait(event)
             except queue.Full:
                 raise RuntimeError("trust queue full") from None
+        elif event.action == "in_progress":
+            self._note_runner(event)
         elif (
             event.action == "completed"
             and self.scheduler is not None
@@ -252,6 +254,24 @@ class Coordinator:
             )
         ):
             log.info("job %s cancelled on GitHub while queued", event.job_id)
+
+    def _note_runner(self, event: WorkflowJobEvent) -> None:
+        """GitHub gives a job to any idle runner with its labels, not to the one Octopus made
+        for it. When the runner that took `event.job_id` was made for another job, keep this
+        job's records under that other job (see `JobStore.set_alias`)."""
+        if self.jobs is None or not event.runner_name:
+            return
+        made_for = self.jobs.job_for_runner(event.runner_name)
+        job_id = str(event.job_id)
+        if made_for is None or made_for == job_id:
+            return
+        self.jobs.set_alias(job_id, made_for)
+        log.info(
+            "GitHub ran job %s on the runner made for job %s: records are kept under %s",
+            job_id,
+            made_for,
+            made_for,
+        )
 
     def _trust_worker(self) -> None:
         while True:

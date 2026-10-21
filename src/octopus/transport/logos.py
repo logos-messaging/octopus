@@ -3,7 +3,6 @@ from __future__ import annotations
 import base64
 import json
 import logging
-import os
 import queue
 import signal
 import sys
@@ -12,13 +11,11 @@ import time
 from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from pathlib import Path
 
+from . import library
 from .base import ChannelHandler, ChannelTransport, Cipher, Handler, SendResult
 
 log = logging.getLogger(__name__)
-
-_BINDINGS = Path(__file__).resolve().parents[3] / "vendor" / "logos-delivery-python-bindings"
 
 DISCONNECTED = "Disconnected"
 _DEDUP_SIZE = 4096
@@ -43,16 +40,17 @@ def _unwrap(res, what: str):
 
 
 def _load_bindings():
-    """The bindings load lib/liblogosdelivery.so relative to their checkout."""
-    root = os.environ.get("OCTOPUS_BINDINGS", str(_BINDINGS))
-    if root not in sys.path:
-        sys.path.insert(0, root)
+    """The bindings load lib/liblogosdelivery.so relative to where their package lives."""
+    root = library.bindings_root()
+    if root is not None and (root / "logosdelivery").is_dir() and str(root) not in sys.path:
+        sys.path.insert(0, str(root))
     try:
         import logosdelivery
     except (ImportError, OSError) as e:
+        expected = library.library_path(root) if root is not None else "lib/liblogosdelivery.so"
         raise LogosLibraryError(
             f"could not load logos-delivery bindings from: {root}; expected "
-            f"{root}/lib/liblogosdelivery.so (see README, set OCTOPUS_BINDINGS "
+            f"{expected} (run: octopus lib install, or set OCTOPUS_BINDINGS "
             f"to relocate): {e}"
         ) from e
     return logosdelivery

@@ -208,8 +208,9 @@ def test_missing_library_error(monkeypatch, tmp_path):
     monkeypatch.setattr(logos, "_load_bindings", _real_load)
     monkeypatch.setenv("OCTOPUS_BINDINGS", str(tmp_path))
     monkeypatch.setattr(sys, "path", list(sys.path))
-    monkeypatch.delitem(sys.modules, "logosdelivery", raising=False)
-    with pytest.raises(LogosLibraryError, match="lib/liblogosdelivery.so"):
+    # None makes the import fail, whether or not the bindings are installed here.
+    monkeypatch.setitem(sys.modules, "logosdelivery", None)
+    with pytest.raises(LogosLibraryError, match="liblogosdelivery.so"):
         logos._load_bindings()
 
 

@@ -208,15 +208,24 @@ def runner_name(runner_id: str, job_id: str, attempt: int) -> str:
     return f"{NAME_PREFIX}{runner_id[:8]}-{job_id[:8]}-{attempt}"
 
 
-def make_jit_provider(jit_runners: JitRunners) -> JitProvider:
-    """The scheduler's `JitProvider` backed by GitHub. Failures become `JitConfigError`."""
+def make_jit_provider(
+    jit_runners: JitRunners, on_runner: Callable[[str, str], None] | None = None
+) -> JitProvider:
+    """The scheduler's `JitProvider` backed by GitHub. Failures become `JitConfigError`.
+
+    `on_runner(name, job_id)` is told which job each runner is made for: GitHub may give the
+    runner another job (issue #58).
+    """
     from ..coordinator.scheduler import JitConfigError
 
     def provide(job, runner) -> SecretStr:
         name = runner_name(runner.runner_id, job.job_id, job.attempt)
         try:
-            return jit_runners.generate(job.repo, name, job.labels).jit_config
+            config = jit_runners.generate(job.repo, name, job.labels).jit_config
         except (JitRunnerError, GitHubApiError) as e:
             raise JitConfigError(str(e)) from None
+        if on_runner is not None:
+            on_runner(name, job.job_id)
+        return config
 
     return provide

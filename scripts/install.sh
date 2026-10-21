@@ -43,12 +43,19 @@ else
   esac
 fi
 
+OCTOPUS_BIN="$(command -v octopus || true)"
+[ -n "$OCTOPUS_BIN" ] || OCTOPUS_BIN="${BIN:-$HOME/.local/bin}/octopus"
+
+echo "fetching the native library (liblogosdelivery)"
+if ! "$OCTOPUS_BIN" lib install; then
+  echo "note: could not fetch it; build it as in the README, then run: octopus lib install --file <path>"
+fi
+
 cat <<'MSG'
 
 Octopus is installed. Next:
   octopus runner setup --coordinator <key>     # who may send you jobs
   octopus runner allow <org/repo>               # which repos you serve
   octopus runner install-service                # start at login
-
-The native library (liblogosdelivery) is not bundled yet: see the README, "Develop".
+  octopus lib status                            # check the native library
 MSG

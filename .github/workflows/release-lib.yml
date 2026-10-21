@@ -1,0 +1,91 @@
+name: Release liblogosdelivery
+
+# Builds liblogosdelivery from the logos-delivery commit pinned by the bindings and, when asked,
+# publishes it to the `lib-latest` release for `octopus lib install`. Nothing is published unless
+# you run this by hand with `publish` ticked.
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Upload the libraries to the lib-latest release"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-22.04, asset: liblogosdelivery-linux-x86_64.so, built: liblogosdelivery.so }
+          - { os: macos-15, asset: liblogosdelivery-macos-arm64.dylib, built: liblogosdelivery.dylib }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      # logos-delivery marks its own submodules update=none, so init only this one.
+      - name: Checkout the pinned logos-delivery
+        working-directory: vendor/logos-delivery-python-bindings
+        run: git submodule update --init --checkout vendor/logos-delivery
+
+      - name: Pinned logos-delivery commit
+        id: pin
+        working-directory: vendor/logos-delivery-python-bindings
+        run: echo "sha=$(git rev-parse HEAD:vendor/logos-delivery)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the built library
+        id: libcache
+        uses: actions/cache@v4
+        with:
+          path: vendor/logos-delivery-python-bindings/vendor/logos-delivery/build/${{ matrix.built }}
+          key: liblogosdelivery-${{ runner.os }}-${{ runner.arch }}-${{ steps.pin.outputs.sha }}
+
+      - name: Build liblogosdelivery
+        if: steps.libcache.outputs.cache-hit != 'true'
+        working-directory: vendor/logos-delivery-python-bindings/vendor/logos-delivery
+        run: |
+          make build-deps
+          make DISABLE_RLN=true liblogosdelivery
+
+      - name: Name the asset
+        run: cp "vendor/logos-delivery-python-bindings/vendor/logos-delivery/build/${{ matrix.built }}" "${{ matrix.asset }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+          if-no-files-found: error
+
+  publish:
+    name: publish
+    needs: build
+    if: inputs.publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: assets
+        run: sha256sum liblogosdelivery-* > SHA256SUMS && cat SHA256SUMS
+
+      - name: Publish the lib-latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release view lib-latest >/dev/null 2>&1 || gh release create lib-latest \
+            --prerelease --title "liblogosdelivery" \
+            --notes "Prebuilt liblogosdelivery for \`octopus lib install\`. Built from the logos-delivery commit pinned by the bindings; see SHA256SUMS."
+          gh release upload lib-latest assets/* --clobber
