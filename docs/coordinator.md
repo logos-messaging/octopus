@@ -93,5 +93,5 @@ log      runner k2b9xq1m, complete
 - Jobs queued on GitHub while the coordinator was down are not picked up when it comes
   back: redeliver them from the App's or webhook's Recent Deliveries. Jobs the coordinator
   was working on when it stopped stay in their last state in the store.
-- One coordinator; failover is #17.
+- Failover needs `OCTOPUS_COORDINATOR_PEERS` on every coordinator (see coordinator-ops.md); without it a coordinator runs alone. A partition can make two coordinators offer the same job (no fencing yet).
 - Inspection is local to the coordinator host.

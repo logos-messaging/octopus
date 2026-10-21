@@ -285,15 +285,16 @@ def test_live_coordinators_never_both_offer_a_job(tmp_path):
         jobs = [owned_by(cluster, 0), owned_by(cluster, 1)]
         for job in jobs:
             cluster.coordinators[0].deliver(job)
-
-        def both_ran() -> bool:
-            # The runner takes one job at a time: the second is offered on a later tick,
-            # once the first has finished.
-            cluster.tick(0)
-            cluster.tick(1)
-            return sorted(node.runs) == sorted(map(str, jobs))
-
-        wait_until(both_ran, what="both jobs ran")
+        # One after the other: the runner has a single slot, and two coordinators offering at
+        # the same moment would have one refused and offered again, which is not what this
+        # scenario is about.
+        for idx, job in enumerate(jobs):
+            cluster.tick(idx)
+            wait_until(lambda job=job: str(job) in node.runs, what=f"job {job} started")
+            wait_until(
+                lambda idx=idx, job=job: cluster.coordinators[idx].job(job).state is State.FINISHED,
+                what=f"job {job} done",
+            )
         offers = [r for c in cluster.coordinators for r in c.github.requests]
         assert sorted(offers) == sorted(map(str, jobs))
     finally:

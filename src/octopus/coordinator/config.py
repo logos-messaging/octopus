@@ -13,6 +13,7 @@ from pathlib import Path
 
 from pydantic import SecretStr
 
+from ..crypto.signing import decode_signing_public
 from ..github.app import DEFAULT_API_URL
 from ..transport.config import (
     DEFAULT_TCP_PORT,
@@ -35,6 +36,8 @@ TOKEN_ENV = "OCTOPUS_GITHUB_TOKEN"
 APP_ID_ENV = "OCTOPUS_GITHUB_APP_ID"
 APP_KEY_FILE_ENV = "OCTOPUS_GITHUB_APP_KEY_FILE"
 API_URL_ENV = "OCTOPUS_GITHUB_API_URL"
+# Other coordinators of the cluster: `id=signing-public-key`, comma separated. Empty: one coordinator.
+PEERS_ENV = "OCTOPUS_COORDINATOR_PEERS"
 
 DEFAULT_LISTEN = "127.0.0.1:8080"
 COORDINATOR_DIR = "coordinator"
@@ -61,6 +64,22 @@ def parse_listen(value: str) -> tuple[str, int]:
     return host.strip("[]"), number
 
 
+def parse_peers(value: str | None) -> dict[str, str]:
+    """`id=public-key,...` to a dict. Raises ConfigError on a malformed entry or key."""
+    peers: dict[str, str] = {}
+    for entry in _list(value):
+        cid, sep, key = entry.partition("=")
+        cid, key = cid.strip(), key.strip()
+        if not (cid and sep and key):
+            raise ConfigError(f"invalid {PEERS_ENV} entry, expected id=public-key: {entry}")
+        try:
+            decode_signing_public(key)
+        except ValueError as e:
+            raise ConfigError(f"invalid {PEERS_ENV} key for coordinator: {cid}: {e}") from None
+        peers[cid] = key
+    return peers
+
+
 def coordinator_dir(data_dir: Path | None = None) -> Path:
     """Where the coordinator keeps its key, databases and state; apart from a runner's."""
     from ..agent.runner import default_data_dir
@@ -84,6 +103,8 @@ class CoordinatorConfig:
     public_ip: str = ""
     tcp_port: int = DEFAULT_TCP_PORT
     entry_nodes: list[str] = field(default_factory=list)
+    # coordinator id -> Ed25519 public key of the other coordinators (see PEERS_ENV)
+    peers: dict[str, str] = field(default_factory=dict)
 
     @property
     def auth_mode(self) -> str:
@@ -114,6 +135,7 @@ class CoordinatorConfig:
             public_ip=env.get(PUBLIC_IP_ENV, "").strip(),
             tcp_port=tcp_port,
             entry_nodes=_list(env.get(ENTRY_NODES_ENV)),
+            peers=parse_peers(env.get(PEERS_ENV)),
         )
         config.validate()
         return config
