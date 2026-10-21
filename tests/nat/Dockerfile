@@ -10,6 +10,7 @@ COPY pyproject.toml README.md ./
 COPY src ./src
 COPY vendor/logos-delivery-python-bindings ./vendor/logos-delivery-python-bindings
 COPY ${LIB} ./vendor/logos-delivery-python-bindings/lib/liblogosdelivery.so
-RUN pip install --no-cache-dir -e '.[logos]'
+# The bindings come from the vendored copy above, so skip the [logos] extra: its git URL needs git.
+RUN pip install --no-cache-dir -e . cffi cbor2 result
 COPY tests/nat/nat_check.py ./nat_check.py
 CMD ["python", "nat_check.py"]
