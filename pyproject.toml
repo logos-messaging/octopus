@@ -15,10 +15,16 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Needed only by octopus.transport.logos. The bindings themselves live in
-# vendor/logos-delivery-python-bindings and load lib/liblogosdelivery.so from
-# their checkout, so they are put on the path at runtime, not installed.
-logos = ["cffi>=1.16.0", "cbor2>=6.1.4", "result>=0.17.0"]
+# Needed only by octopus.transport.logos. The bindings load lib/liblogosdelivery.so from beside
+# their package: `octopus lib install` puts the library there. In a git clone the vendored
+# submodule is used instead (see octopus.transport.library).
+logos = [
+  "cffi>=1.16.0",
+  "cbor2>=6.1.4",
+  "result>=0.17.0",
+  # Same commit as the vendor/logos-delivery-python-bindings submodule (a test keeps them equal).
+  "logosdelivery @ git+https://github.com/logos-messaging/logos-delivery-python-bindings@8068335cf885c00aae1c766be8b51d8d275d7d1d",
+]
 dev = ["pytest>=8.0", "ruff>=0.5"]
 
 [project.scripts]
