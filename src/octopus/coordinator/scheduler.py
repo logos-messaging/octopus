@@ -334,12 +334,21 @@ class Scheduler:
     def _accepted(self, job: PendingJob, runner: Presence) -> None:
         self._transition(job.job_id, State.ACKED, detail=f"runner: {runner.runner_id}")
         self._notify("accepted", job.job_id)
-        with self._lock:
-            self._inflight.pop(job.job_id, None)
-            self._active[job.job_id] = (job, runner.runner_id)
-            early = self._early_status.pop(job.job_id, [])
-        for status in early:
-            self._apply_status(job, runner.runner_id, status)
+        # Statuses stay queued while the job is in flight, so one that arrives during the
+        # replay cannot overtake the ones before it. The job becomes active only once the
+        # queue is empty, and not at all if it already finished.
+        finished = False
+        while True:
+            with self._lock:
+                early = self._early_status.pop(job.job_id, [])
+                if not early:
+                    self._inflight.pop(job.job_id, None)
+                    if not finished:
+                        self._active[job.job_id] = (job, runner.runner_id)
+                    return
+            for status in early:
+                self._apply_status(job, runner.runner_id, status)
+                finished = finished or status.state == "finished"
 
     def _refused(self, job: PendingJob, runner: Presence, result: OfferResult) -> None:
         reason = result.reason or FailureReason.OFFER_TIMEOUT
