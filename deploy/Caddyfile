@@ -11,6 +11,14 @@
 		reverse_proxy coordinator:8080
 	}
 
+	# OIDC pick mode only (OCTOPUS_OIDC_AUDIENCE set): the workflow's pick job calls this.
+	handle /pick {
+		request_body {
+			max_size 4KB
+		}
+		reverse_proxy coordinator:8080
+	}
+
 	handle {
 		respond "not found" 404
 	}

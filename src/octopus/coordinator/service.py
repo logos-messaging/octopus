@@ -31,7 +31,8 @@ from ..crypto.signing import (
 from ..github.app import GitHubApiError, GitHubClient
 from ..github.runners import JitRunnerError, JitRunners, make_jit_provider
 from ..github.trust import resolve_trust_inputs
-from ..github.webhooks import WebhookReceiver, WorkflowJobEvent
+from ..github.webhooks import OCTOPUS_LABEL, WebhookReceiver, WorkflowJobEvent
+from ..oidc import OidcVerifier
 from ..policy import TrustPolicy
 from ..proto import FailureReason
 from ..transport import ChannelTransport
@@ -40,6 +41,8 @@ from .config import CoordinatorConfig
 from .jobs import SqliteJobStore, State
 from .logs import LogCollector, LogStore
 from .offers import OfferSender
+from .pick import PickService
+from .picker import PICK_LABEL_PREFIX, Picker
 from .registry import Registry
 from .scheduler import Scheduler, SchedulerConfig
 from .webhook_server import WebhookServer
@@ -87,7 +90,7 @@ class Coordinator:
         self,
         config: CoordinatorConfig,
         transport: ChannelTransport,
-        github: GitHubClient,
+        github: GitHubClient | None,
         directory: Path,
         *,
         scheduler_config: SchedulerConfig | None = None,
@@ -123,6 +126,7 @@ class Coordinator:
         self.collector: LogCollector | None = None
         self.server: WebhookServer | None = None
         self.jit: JitRunners | None = None
+        self.picker: Picker | None = None
 
     # lifecycle
 
@@ -141,46 +145,31 @@ class Coordinator:
             self.registry.start()
             self.collector = LogCollector(self._transport, key, self.logs)
             self.collector.start()
-            offers = OfferSender(self._transport, key, on_status=self._on_status)
-            self.jit = JitRunners(self._github)
             policy = TrustPolicy(
                 allowed_repos=frozenset(self._config.allowed_repos),
                 allowed_orgs=frozenset(self._config.allowed_orgs),
             )
-            if self._config.peers:
-                self.cluster = CoordinatorCluster(
-                    self.coordinator_id,
-                    signing_key,
-                    {cid: decode_signing_public(pub) for cid, pub in self._config.peers.items()},
-                    self._transport,
-                    self._adopt,
-                    config=self._cluster_config,
-                    cancel=self._cancel,
-                )
-            self.scheduler = Scheduler(
-                self.registry,
-                self.jobs,
-                offers,
-                make_jit_provider(self.jit, self.jobs.record_runner),
-                config=self._scheduler_config,
-                policy=policy,
-                logs=self.collector,
-                events=self.cluster,
-            )
-            self.scheduler.start()
-            if self.cluster is not None:
-                self.cluster.start()
-                self._spawn(self._cluster_ticker, "octopus-cluster")
-            self._spawn(self._trust_worker, "octopus-trust")
+            if self._github is not None:
+                self._start_scheduling(key, signing_key, policy)
+            pick = None
+            if self._config.pick_enabled:
+                self.picker = Picker(self.registry)
+                pick = PickService(
+                    OidcVerifier(self._config.oidc_audience),
+                    self.picker,
+                    policy,
+                ).handle
             receiver = WebhookReceiver(
                 [s.get_secret_value().encode() for s in self._config.webhook_secrets],
                 self._on_webhook,
+                label_prefix=PICK_LABEL_PREFIX if self._config.pick_enabled else None,
             )
             self.server = WebhookServer(
                 receiver,
                 self._config.listen_host,
                 self._config.listen_port,
                 self._config.webhook_path,
+                pick,
             )
             self.server.start()
         except BaseException:
@@ -189,6 +178,36 @@ class Coordinator:
         self._started_at = time.time()
         self._spawn(self._maintenance, "octopus-maintenance")
         self._write_state()
+
+    def _start_scheduling(self, key, signing_key, policy: TrustPolicy) -> None:
+        """The JIT runner flow: needs a GitHub credential."""
+        offers = OfferSender(self._transport, key, on_status=self._on_status)
+        self.jit = JitRunners(self._github)
+        if self._config.peers:
+            self.cluster = CoordinatorCluster(
+                self.coordinator_id,
+                signing_key,
+                {cid: decode_signing_public(pub) for cid, pub in self._config.peers.items()},
+                self._transport,
+                self._adopt,
+                config=self._cluster_config,
+                cancel=self._cancel,
+            )
+        self.scheduler = Scheduler(
+            self.registry,
+            self.jobs,
+            offers,
+            make_jit_provider(self.jit, self.jobs.record_runner),
+            config=self._scheduler_config,
+            policy=policy,
+            logs=self.collector,
+            events=self.cluster,
+        )
+        self.scheduler.start()
+        if self.cluster is not None:
+            self.cluster.start()
+            self._spawn(self._cluster_ticker, "octopus-cluster")
+        self._spawn(self._trust_worker, "octopus-trust")
 
     def wait(self) -> None:
         self._stopped.wait()
@@ -240,6 +259,10 @@ class Coordinator:
         """Runs on the webhook request: must not block. Raising answers 500."""
         with self._lock:
             self._repos_seen[event.repo] = time.time()
+        if self.picker is not None:
+            self.picker.on_job_event(event)
+        if self._github is None or not event.has_label(OCTOPUS_LABEL):
+            return  # a pick-mode job: Octopus does not schedule it
         if event.action == "queued":
             try:
                 self._queue.put_nowait(event)

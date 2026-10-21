@@ -38,6 +38,8 @@ APP_KEY_FILE_ENV = "OCTOPUS_GITHUB_APP_KEY_FILE"
 API_URL_ENV = "OCTOPUS_GITHUB_API_URL"
 # Other coordinators of the cluster: `id=signing-public-key`, comma separated. Empty: one coordinator.
 PEERS_ENV = "OCTOPUS_COORDINATOR_PEERS"
+# OIDC pick mode (docs/oidc-pick.md): on when the audience is set; needs no GitHub credential.
+OIDC_AUDIENCE_ENV = "OCTOPUS_OIDC_AUDIENCE"
 
 DEFAULT_LISTEN = "127.0.0.1:8080"
 COORDINATOR_DIR = "coordinator"
@@ -105,10 +107,17 @@ class CoordinatorConfig:
     entry_nodes: list[str] = field(default_factory=list)
     # coordinator id -> Ed25519 public key of the other coordinators (see PEERS_ENV)
     peers: dict[str, str] = field(default_factory=dict)
+    oidc_audience: str = ""
+
+    @property
+    def pick_enabled(self) -> bool:
+        return bool(self.oidc_audience)
 
     @property
     def auth_mode(self) -> str:
-        return "app" if self.app_id else "token"
+        if self.app_id:
+            return "app"
+        return "token" if self.github_token is not None else "oidc"
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> CoordinatorConfig:
@@ -136,6 +145,7 @@ class CoordinatorConfig:
             tcp_port=tcp_port,
             entry_nodes=_list(env.get(ENTRY_NODES_ENV)),
             peers=parse_peers(env.get(PEERS_ENV)),
+            oidc_audience=env.get(OIDC_AUDIENCE_ENV, "").strip(),
         )
         config.validate()
         return config
@@ -150,10 +160,10 @@ class CoordinatorConfig:
                 raise ConfigError(f"{APP_ID_ENV} is set but {APP_KEY_FILE_ENV} is not")
             if not self.app_key_file.is_file():
                 raise ConfigError(f"{APP_KEY_FILE_ENV}: no such file: {self.app_key_file}")
-        elif self.github_token is None:
+        elif self.github_token is None and not self.pick_enabled:
             raise ConfigError(
                 f"no GitHub credentials: set {TOKEN_ENV} (token setup) or {APP_ID_ENV} and "
-                f"{APP_KEY_FILE_ENV} (GitHub App)"
+                f"{APP_KEY_FILE_ENV} (GitHub App), or {OIDC_AUDIENCE_ENV} (OIDC pick mode)"
             )
         if not self.allowed_repos and not self.allowed_orgs:
             raise ConfigError(

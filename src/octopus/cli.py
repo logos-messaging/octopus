@@ -510,6 +510,8 @@ def _github_client(config):
     from .github.app import GitHubApp
     from .github.token import TokenClient
 
+    if config.auth_mode == "oidc":
+        return None
     if config.auth_mode == "token":
         return TokenClient(config.github_token, api_url=config.api_url)
     try:

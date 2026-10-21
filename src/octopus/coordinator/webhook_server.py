@@ -6,13 +6,17 @@ to localhost by default for that reason.
 
 from __future__ import annotations
 
+import json
 import logging
 import socket
 import time
+from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 
 from ..github.webhooks import WebhookReceiver
+from .pick import DEFAULT_PATH as PICK_PATH
+from .pick import PickResponse
 
 log = logging.getLogger(__name__)
 
@@ -22,6 +26,7 @@ REQUEST_TIMEOUT_S = 10
 # How long, and how much, to read of a refused request before closing (see _drain_request).
 _DRAIN_SECONDS = 1.0
 _DRAIN_MAX_BYTES = 1 << 20
+_PICK_MAX_BODY = 4096
 
 
 class WebhookServer:
@@ -31,8 +36,13 @@ class WebhookServer:
         host: str = "127.0.0.1",
         port: int = 8080,
         path: str = DEFAULT_PATH,
+        pick: Callable[[str | None], PickResponse] | None = None,
     ) -> None:
-        handler = type("Handler", (_Handler,), {"receiver": receiver, "path_": path})
+        handler = type(
+            "Handler",
+            (_Handler,),
+            {"receiver": receiver, "path_": path, "pick": staticmethod(pick) if pick else None},
+        )
         self._httpd = ThreadingHTTPServer((host, port), handler)
         self._httpd.daemon_threads = True
         self._thread: Thread | None = None
@@ -61,12 +71,17 @@ class WebhookServer:
 class _Handler(BaseHTTPRequestHandler):
     receiver: WebhookReceiver
     path_: str
+    pick: Callable[[str | None], PickResponse] | None = None
     timeout = REQUEST_TIMEOUT_S
     server_version = "octopus"
     sys_version = ""
 
     def do_POST(self) -> None:
-        if self.path.split("?", 1)[0] != self.path_:
+        route = self.path.split("?", 1)[0]
+        if self.pick is not None and route == PICK_PATH:
+            self._pick()
+            return
+        if route != self.path_:
             self._reply(404, "not found")
             return
         length = self.headers.get("Content-Length")
@@ -86,12 +101,33 @@ class _Handler(BaseHTTPRequestHandler):
         self._reply(resp.status, resp.message)
 
     def do_GET(self) -> None:
-        self._reply(405 if self.path.split("?", 1)[0] == self.path_ else 404, "use POST")
+        route = self.path.split("?", 1)[0]
+        known = route == self.path_ or (self.pick is not None and route == PICK_PATH)
+        self._reply(405 if known else 404, "use POST")
 
-    def _reply(self, status: int, message: str) -> None:
+    def _pick(self) -> None:
+        # The request has no body; one that has is read (up to a limit) and ignored.
+        length = self.headers.get("Content-Length", "0")
+        if not length.isdigit() or int(length) > _PICK_MAX_BODY:
+            self._reply(413, "payload too large")
+            return
+        self.rfile.read(int(length))
+        assert self.pick is not None
+        resp = self.pick(self.headers.get("Authorization"))
+        self._reply(resp.status, json.dumps(resp.body), "application/json", resp.headers)
+
+    def _reply(
+        self,
+        status: int,
+        message: str,
+        content_type: str = "text/plain; charset=utf-8",
+        headers: dict[str, str] | None = None,
+    ) -> None:
         data = (message + "\n").encode()
         self.send_response(status)
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Type", content_type)
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.send_header("Content-Length", str(len(data)))
         if status >= 400:
             # The body may not have been read; do not reuse the connection.

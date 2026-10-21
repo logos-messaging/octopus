@@ -211,6 +211,7 @@ class WebhookReceiver:
         sink: EventSink,
         *,
         label: str = OCTOPUS_LABEL,
+        label_prefix: str | None = None,
         max_body_bytes: int = DEFAULT_MAX_BODY_BYTES,
         deliveries: DeliveryLog | None = None,
     ) -> None:
@@ -219,6 +220,8 @@ class WebhookReceiver:
             raise ValueError("a non-empty webhook secret is required")
         self._sink = sink
         self._label = label
+        # Also take jobs with a label that starts with this (OIDC pick mode: `octopus-<name>`).
+        self._label_prefix = label_prefix.casefold() if label_prefix else None
         self.max_body_bytes = max_body_bytes
         self._deliveries = deliveries if deliveries is not None else DeliveryLog()
 
@@ -251,7 +254,10 @@ class WebhookReceiver:
         except PayloadError as e:
             log.warning("rejected delivery %s: %s", delivery_id, e)
             return WebhookResponse(400, "malformed workflow_job payload")
-        if not job.has_label(self._label):
+        has_prefix = self._label_prefix is not None and any(
+            lbl.casefold().startswith(self._label_prefix) for lbl in job.labels
+        )
+        if not (job.has_label(self._label) or has_prefix):
             return WebhookResponse(202, f"ignored: job has no {self._label!r} label")
         if not self._deliveries.claim(delivery_id):
             log.info("duplicate delivery %s ignored", delivery_id)
