@@ -89,7 +89,7 @@ def test_download_rejects_a_wrong_checksum(tmp_path, linux):
 
 
 def test_download_without_a_checksum_for_the_asset(tmp_path, linux):
-    with pytest.raises(library.LibraryError, match="could not find the checksum"):
+    with pytest.raises(library.LibraryError, match="no library for this platform.*--file"):
         library.download("t", tmp_path, _client({linux: b"x", "SHA256SUMS": b""}), "https://x/r")
 
 
@@ -136,3 +136,27 @@ def test_pyproject_pins_the_same_bindings_commit_as_the_submodule():
     except (OSError, subprocess.CalledProcessError):
         pytest.skip("not a git checkout")
     assert f"logos-delivery-python-bindings@{sha}" in (root / "pyproject.toml").read_text()
+
+
+def test_download_enforces_the_limit_and_keeps_no_partial_file(tmp_path, linux, monkeypatch):
+    data = b"0123456789"
+    sums = f"{hashlib.sha256(data).hexdigest()}  {linux}\n".encode()
+    files = {linux: data, "SHA256SUMS": sums}
+    monkeypatch.setattr(library, "MAX_LIBRARY_BYTES", 9)
+    with pytest.raises(library.LibraryError, match="larger than 9 bytes"):
+        library.download("t", tmp_path, _client(files), "https://x/r")
+    assert list(tmp_path.iterdir()) == []
+    monkeypatch.setattr(library, "MAX_LIBRARY_BYTES", 10)
+    assert library.download("t", tmp_path, _client(files), "https://x/r").read_bytes() == data
+
+
+def test_the_limit_fits_the_release_build():
+    # The Linux library of the release workflow is about 270 MB (279182592 bytes).
+    assert library.MAX_LIBRARY_BYTES > 300 * 1000 * 1000
+
+
+def test_a_failed_download_leaves_no_partial_file(tmp_path, linux):
+    sums = f"{'0' * 64}  {linux}\n".encode()
+    with pytest.raises(library.LibraryError, match="checksum mismatch"):
+        library.download("t", tmp_path, _client({linux: b"x", "SHA256SUMS": sums}), "https://x/r")
+    assert list(tmp_path.iterdir()) == []

@@ -13,6 +13,7 @@ import os
 import platform
 import shutil
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -24,7 +25,10 @@ RELEASE_REPO = "logos-messaging/octopus"
 # Moving release the library workflow keeps up to date with the pinned bindings.
 DEFAULT_TAG = "lib-latest"
 SUMS_ASSET = "SHA256SUMS"
-MAX_LIBRARY_BYTES = 256 * 1024 * 1024
+# The Linux build of the release workflow is about 270 MB. The download goes to disk in chunks,
+# so a high limit costs no memory.
+MAX_LIBRARY_BYTES = 1024 * 1024 * 1024
+MAX_SUMS_BYTES = 64 * 1024
 
 
 class LibraryError(RuntimeError):
@@ -110,18 +114,25 @@ def install_file(src: Path, root: Path) -> Path:
     return lib
 
 
-def _get(client: httpx.Client, url: str) -> bytes:
+def _stream(client: httpx.Client, url: str, sink: Callable[[bytes], object], limit: int) -> None:
+    """Give each chunk of `url` to `sink`, and stop when the body is larger than `limit`."""
     try:
         with client.stream("GET", url, follow_redirects=True) as resp:
             resp.raise_for_status()
-            data = bytearray()
+            size = 0
             for chunk in resp.iter_bytes():
-                data += chunk
-                if len(data) > MAX_LIBRARY_BYTES:
-                    raise LibraryError(f"could not download: {url}: larger than the limit")
-            return bytes(data)
+                size += len(chunk)
+                if size > limit:
+                    raise LibraryError(f"could not download: {url}: larger than {limit} bytes")
+                sink(chunk)
     except httpx.HTTPError as e:
         raise LibraryError(f"could not download: {url}: {e}") from e
+
+
+def _get(client: httpx.Client, url: str, limit: int) -> bytes:
+    data = bytearray()
+    _stream(client, url, data.extend, limit)
+    return bytes(data)
 
 
 def parse_sums(text: str) -> dict[str, str]:
@@ -144,20 +155,32 @@ def download(
     base = base_url or f"https://github.com/{RELEASE_REPO}/releases/download/{tag}"
     own = client is None
     client = client or httpx.Client(timeout=60.0)
+    out = Path(dest_dir or tempfile.mkdtemp(prefix="octopus-lib-")) / asset
+    part = out.with_name(out.name + ".part")
+    digest = hashlib.sha256()
     try:
-        sums = parse_sums(_get(client, f"{base}/{SUMS_ASSET}").decode("utf-8", "replace"))
-        expected = sums.get(asset)
+        sums_text = _get(client, f"{base}/{SUMS_ASSET}", MAX_SUMS_BYTES)
+        expected = parse_sums(sums_text.decode("utf-8", "replace")).get(asset)
         if expected is None:
-            raise LibraryError(f"could not find the checksum, release: {tag}: asset: {asset}")
-        data = _get(client, f"{base}/{asset}")
+            raise LibraryError(
+                f"the release has no library for this platform, release: {tag}: asset: {asset}: "
+                "build it and use --file"
+            )
+        with part.open("wb") as f:
+
+            def sink(chunk: bytes) -> None:
+                digest.update(chunk)
+                f.write(chunk)
+
+            _stream(client, f"{base}/{asset}", sink, MAX_LIBRARY_BYTES)
+        actual = digest.hexdigest()
+        if actual != expected:
+            raise LibraryError(
+                f"checksum mismatch: asset: {asset}: expected: {expected}: got: {actual}"
+            )
+        os.replace(part, out)
     finally:
+        part.unlink(missing_ok=True)
         if own:
             client.close()
-    actual = hashlib.sha256(data).hexdigest()
-    if actual != expected:
-        raise LibraryError(
-            f"checksum mismatch: asset: {asset}: expected: {expected}: got: {actual}"
-        )
-    out = Path(dest_dir or tempfile.mkdtemp(prefix="octopus-lib-")) / asset
-    out.write_bytes(data)
     return out
