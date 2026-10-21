@@ -45,6 +45,14 @@ It asks for a removal token (shown on the runners page of the repo; or set `OCTO
 deletes its local files (`--keep-files` keeps them). A runner that is only stopped stays listed in
 GitHub as offline until it is removed.
 
+## Shared account and files
+
+A manual runner runs jobs as your user, with no trust policy, and its `bin/` and `externals/` are
+hard-linked to the verified runner cache that the Octopus (coordinator) runner also uses from the same
+data dir. A job on a manual runner can therefore change files that later Octopus jobs on this
+machine run. If you run both on one machine, use a separate user or a separate `--data-dir` for the
+manual runner.
+
 ## Tokens
 
 - The registration and removal tokens expire after one hour and are bound to the target.
