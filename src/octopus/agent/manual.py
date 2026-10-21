@@ -23,10 +23,11 @@ from .runner.process import IS_WINDOWS, make_job_dir
 from .runner.release import RunnerAsset, UnsupportedPlatformError, asset_for, platform_key
 
 TOKEN_ENV = "OCTOPUS_REGISTRATION_TOKEN"
+REMOVAL_TOKEN_ENV = "OCTOPUS_REMOVAL_TOKEN"
 # actions/runner reads its command-line arguments from ACTIONS_RUNNER_INPUT_<NAME>; the
 # token goes there so it is not visible in `ps`.
 _RUNNER_TOKEN_ENV = "ACTIONS_RUNNER_INPUT_TOKEN"
-_SECRET_ENV = (TOKEN_ENV, _RUNNER_TOKEN_ENV)
+_SECRET_ENV = (TOKEN_ENV, REMOVAL_TOKEN_ENV, _RUNNER_TOKEN_ENV)
 DEFAULT_LABELS = ("octopus",)
 _PART = r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?"
 _TARGET = re.compile(rf"^(?P<owner>{_PART})(?:/(?P<repo>{_PART}))?$")

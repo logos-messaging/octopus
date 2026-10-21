@@ -215,6 +215,23 @@ def test_unregister_removes_from_github_and_deletes_files(fake_runner):
     assert not tree.exists()
 
 
+def test_removal_token_comes_from_its_own_variable(fake_runner, monkeypatch):
+    init_manual(*fresh(run="n"))
+    monkeypatch.setenv(manual.REMOVAL_TOKEN_ENV, "REMOVAL-ENV")
+    result = cli.invoke(app, ["runner", "unregister-manual", "acme/app"])  # no prompt answer
+    assert result.exit_code == 0, result.output
+    assert "unregistered from" in result.output
+
+
+def test_registration_variable_is_not_used_for_removal(fake_runner, monkeypatch):
+    # A registration token is rejected by GitHub at removal: ask for the right one.
+    init_manual(*fresh(run="n"))
+    monkeypatch.setenv(manual.TOKEN_ENV, TOKEN)
+    result = cli.invoke(app, ["runner", "unregister-manual", "acme/app"], input="REMOVAL\n")
+    assert result.exit_code == 0, result.output
+    assert "Paste the removal token" in result.output
+
+
 def test_unregister_keep_files(fake_runner):
     init_manual(*fresh(run="n"))
     result = cli.invoke(app, ["runner", "unregister-manual", "acme/app", "--keep-files"], input="R\n")

@@ -19,7 +19,7 @@ octopus init --role manual        # or: octopus init, and answer "manual" to the
 1. Octopus asks for the target: a repo (`acme/app`), an org (`acme`) or a https URL.
 2. It prints the page to open (`https://github.com/acme/app/settings/actions/runners/new`).
    Copy the token shown in the `./config.sh` command there.
-3. Paste it at the hidden prompt (or set `OCTOPUS_REGISTRATION_TOKEN` for that one run). It also
+3. Paste it at the hidden prompt (or set `OCTOPUS_REGISTRATION_TOKEN`; it is never passed on to the runner). It also
    asks for extra labels and a runner name; an empty answer takes the default.
 4. Octopus downloads and verifies the pinned `actions/runner` release (the same one the
    coordinator flow uses), registers the runner with the label `octopus`, and runs it in the
@@ -41,7 +41,7 @@ pick this machine).
 octopus runner unregister-manual acme/app
 ```
 
-It asks for a removal token (shown on the runners page of the repo), unregisters the runner and
+It asks for a removal token (shown on the runners page of the repo; or set `OCTOPUS_REMOVAL_TOKEN`: a registration token does not work for removal), unregisters the runner and
 deletes its local files (`--keep-files` keeps them). A runner that is only stopped stays listed in
 GitHub as offline until it is removed.
 

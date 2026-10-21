@@ -34,9 +34,12 @@ def data_dir_or_default(path: Path | None) -> Path:
     return path or default_data_dir()
 
 
-def ask_token(what: str, page: str) -> str:
-    """The token from the environment, or a hidden prompt. A blank one is an error."""
-    token = os.environ.get(manual.TOKEN_ENV, "").strip()
+def ask_token(what: str, page: str, env_var: str) -> str:
+    """The token from `env_var`, or a hidden prompt. A blank one is an error.
+
+    Registration and removal tokens are different things, so each has its own variable.
+    """
+    token = os.environ.get(env_var, "").strip()
     if not token:
         typer.echo(f"Get a {what} token (valid for one hour) at:\n  {page}")
         token = str(typer.prompt(f"Paste the {what} token (input is hidden)", hide_input=True))
@@ -62,7 +65,7 @@ def add_manual(runner_app: typer.Typer) -> None:
                 return
             if manual.is_configured(directory):
                 page = parsed.new_runner_page.removesuffix("/new")
-                manual.remove(directory, ask_token("removal", page))
+                manual.remove(directory, ask_token("removal", page, manual.REMOVAL_TOKEN_ENV))
                 typer.echo(f"unregistered from: {parsed.url}")
         except manual.ManualRunnerError as e:
             raise _fail(str(e), 2 if "could not read runner target" in str(e) else 1) from e

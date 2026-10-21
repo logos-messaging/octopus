@@ -206,7 +206,7 @@ def _manual_register(base: Path, target) -> tuple[Check, Path | None]:
         raw = _ask("Extra labels, comma separated (empty: only octopus)")
         labels = [*manual.DEFAULT_LABELS, *[x.strip() for x in raw.split(",") if x.strip()]]
         name = _ask("Runner name in GitHub", manual.default_name())
-        token = ask_token("registration", target.new_runner_page)
+        token = ask_token("registration", target.new_runner_page, manual.TOKEN_ENV)
         manual.configure(directory, target, token, name=name, labels=labels)
     except manual.ManualRunnerError as e:
         return Check("registration", Status.FAIL, str(e)), None
