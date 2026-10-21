@@ -31,7 +31,7 @@ def test_runner_spec_uses_this_interpreter_and_passes_env():
     spec = service.runner_spec(Path("cfg.json"), {"OCTOPUS_BINDINGS": "/b", "OTHER": "x"})
     assert spec.argv[1:5] == ("-m", "octopus", "runner", "start")
     assert spec.argv[-2] == "--config" and Path(spec.argv[-1]).is_absolute()
-    assert spec.env == {"OCTOPUS_BINDINGS": "/b"}
+    assert spec.env == {"OCTOPUS_BINDINGS": str(Path("/b").resolve())}  # a drive path on Windows
 
 
 def test_launchd_plist():
