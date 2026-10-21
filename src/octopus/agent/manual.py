@@ -49,6 +49,10 @@ class Target:
         return f"{self.base}/{self.owner}" + (f"/{self.repo}" if self.repo else "")
 
     @property
+    def name(self) -> str:
+        return f"{self.owner}/{self.repo}" if self.repo else self.owner
+
+    @property
     def slug(self) -> str:
         return f"{self.owner}__{self.repo}" if self.repo else self.owner
 

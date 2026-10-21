@@ -51,6 +51,16 @@ def runner_tree(data, slug="acme__app"):
     return data / "manual-runner" / slug
 
 
+def init_manual(*answers, args=()):
+    """`octopus init --role manual`; answers are the lines typed at the prompts."""
+    return cli.invoke(app, ["init", "--role", "manual", *args], input="\n".join(answers) + "\n")
+
+
+# fresh registration: target, labels, name, token, run now?
+def fresh(token=TOKEN, labels="", name="", run="y", target="acme/app"):
+    return (target, labels, name, token, run)
+
+
 # parsing
 
 
@@ -79,11 +89,11 @@ def test_new_runner_page():
     assert "organizations/acme/settings" in Target("acme", None).new_runner_page
 
 
-# register-manual
+# octopus init --role manual
 
 
-def test_register_prompts_for_hidden_token_and_runs(fake_runner):
-    result = cli.invoke(app, ["runner", "register-manual", "acme/app"], input=TOKEN + "\n")
+def test_registers_with_a_hidden_token_and_runs(fake_runner):
+    result = init_manual(*fresh())
     assert result.exit_code == 0, result.output
     tree = runner_tree(fake_runner)
     args = (tree / "config.args").read_text().split()
@@ -91,11 +101,11 @@ def test_register_prompts_for_hidden_token_and_runs(fake_runner):
     assert args[args.index("--labels") + 1] == "octopus"
     assert "--replace" in args
     assert (tree / "run.marker").exists()
-    assert "registered:" in result.output
+    assert "plain GitHub runner" in result.output
 
 
 def test_token_goes_through_the_environment_not_argv_nor_output(fake_runner):
-    result = cli.invoke(app, ["runner", "register-manual", "acme/app"], input=TOKEN + "\n")
+    result = init_manual(*fresh())
     tree = runner_tree(fake_runner)
     assert (tree / "config.token").read_text() == TOKEN
     assert TOKEN not in (tree / "config.args").read_text()
@@ -104,57 +114,59 @@ def test_token_goes_through_the_environment_not_argv_nor_output(fake_runner):
 
 def test_token_from_the_environment(fake_runner, monkeypatch):
     monkeypatch.setenv(manual.TOKEN_ENV, TOKEN)
-    result = cli.invoke(app, ["runner", "register-manual", "acme/app", "--no-start"])
+    result = init_manual("acme/app", "", "", "n")  # no token line
     assert result.exit_code == 0, result.output
     assert (runner_tree(fake_runner) / "config.token").read_text() == TOKEN
 
 
 def test_extra_labels_and_name(fake_runner):
-    result = cli.invoke(
-        app,
-        ["runner", "register-manual", "acme/app", "--labels", "gpu", "--labels", "fast", "--name", "lap"],
-        input=TOKEN + "\n",
-    )
+    result = init_manual(*fresh(labels="gpu, fast", name="lap"))
     assert result.exit_code == 0, result.output
     args = (runner_tree(fake_runner) / "config.args").read_text().split()
     assert args[args.index("--labels") + 1] == "octopus,gpu,fast"
     assert args[args.index("--name") + 1] == "lap"
 
 
-def test_no_start_registers_only(fake_runner):
-    result = cli.invoke(app, ["runner", "register-manual", "acme/app", "--no-start"], input=TOKEN + "\n")
+def test_answering_no_registers_without_starting(fake_runner):
+    result = init_manual(*fresh(run="n"))
     assert result.exit_code == 0, result.output
+    assert (runner_tree(fake_runner) / ".runner").exists()
     assert not (runner_tree(fake_runner) / "run.marker").exists()
+    assert "unregister-manual acme/app" in result.output
 
 
 def test_second_run_does_not_ask_for_a_token(fake_runner):
-    cli.invoke(app, ["runner", "register-manual", "acme/app", "--no-start"], input=TOKEN + "\n")
+    init_manual(*fresh(run="n"))
     (runner_tree(fake_runner) / "config.args").unlink()
-    result = cli.invoke(app, ["runner", "register-manual", "acme/app"])  # no input
+    result = init_manual("acme/app", "y")  # target, run now; no token, labels or name
     assert result.exit_code == 0, result.output
     assert "already registered" in result.output
     assert not (runner_tree(fake_runner) / "config.args").exists()
     assert (runner_tree(fake_runner) / "run.marker").exists()
 
 
-def test_reconfigure_asks_again(fake_runner):
-    cli.invoke(app, ["runner", "register-manual", "acme/app", "--no-start"], input=TOKEN + "\n")
-    result = cli.invoke(
-        app, ["runner", "register-manual", "acme/app", "--no-start", "--reconfigure"], input="NEW\n"
-    )
-    assert result.exit_code == 0, result.output
-    assert (runner_tree(fake_runner) / "config.token").read_text() == "NEW"
-
-
-def test_blank_token_is_an_error(fake_runner):
-    result = cli.invoke(app, ["runner", "register-manual", "acme/app"], input="   \n")
-    assert result.exit_code == 2
+def test_blank_token_is_a_failure(fake_runner):
+    result = init_manual("acme/app", "", "", "   ")
+    assert result.exit_code == 1
     assert "no registration token given" in result.output
+
+
+def test_bad_target_is_asked_again(fake_runner):
+    result = init_manual("a/b/c", *fresh())
+    assert result.exit_code == 0, result.output
+    assert "could not read runner target" in result.output
+    assert (runner_tree(fake_runner) / ".runner").exists()
+
+
+def test_empty_target_skips(fake_runner):
+    result = init_manual("")
+    assert result.exit_code == 0
+    assert "nothing to register" in result.output
 
 
 def test_failed_config_reports_and_hides_the_token(fake_runner, monkeypatch):
     monkeypatch.setenv("FAKE_CONFIG_FAIL", "1")
-    result = cli.invoke(app, ["runner", "register-manual", "acme/app"], input=TOKEN + "\n")
+    result = init_manual("acme/app", "", "", TOKEN)
     assert result.exit_code == 1
     assert "could not configure runner: exit code 1" in result.output
     assert TOKEN not in result.output
@@ -164,29 +176,23 @@ def test_failed_config_reports_and_hides_the_token(fake_runner, monkeypatch):
 
 def test_runner_exit_code_is_reported(fake_runner, monkeypatch):
     monkeypatch.setenv("FAKE_RUN_EXIT", "3")
-    result = cli.invoke(app, ["runner", "register-manual", "acme/app"], input=TOKEN + "\n")
+    result = init_manual(*fresh())
     assert result.exit_code == 1
-    assert "runner exited: code: 3" in result.output
+    assert "exited with code: 3" in result.output
 
 
-def test_bad_target(fake_runner):
-    result = cli.invoke(app, ["runner", "register-manual", "a/b/c"])
-    assert result.exit_code == 2
-    assert "could not read runner target" in result.output
-
-
-def test_warns_that_octopus_does_not_schedule_it(fake_runner):
-    result = cli.invoke(app, ["runner", "register-manual", "acme/app", "--no-start"], input=TOKEN + "\n")
-    assert "plain GitHub runner" in result.output
+def test_role_is_asked_and_manual_is_one_answer(fake_runner):
+    result = cli.invoke(app, ["init"], input="\n".join(["manual", *fresh(run="n")]) + "\n")
+    assert result.exit_code == 0, result.output
+    assert (runner_tree(fake_runner) / ".runner").exists()
 
 
 # unregister-manual
 
 
 def test_unregister_removes_from_github_and_deletes_files(fake_runner):
-    cli.invoke(app, ["runner", "register-manual", "acme/app", "--no-start"], input=TOKEN + "\n")
+    init_manual(*fresh(run="n"))
     tree = runner_tree(fake_runner)
-    assert tree.is_dir()
     result = cli.invoke(app, ["runner", "unregister-manual", "acme/app"], input="REMOVAL\n")
     assert result.exit_code == 0, result.output
     assert "unregistered from" in result.output
@@ -194,7 +200,7 @@ def test_unregister_removes_from_github_and_deletes_files(fake_runner):
 
 
 def test_unregister_keep_files(fake_runner):
-    cli.invoke(app, ["runner", "register-manual", "acme/app", "--no-start"], input=TOKEN + "\n")
+    init_manual(*fresh(run="n"))
     result = cli.invoke(app, ["runner", "unregister-manual", "acme/app", "--keep-files"], input="R\n")
     assert result.exit_code == 0, result.output
     assert runner_tree(fake_runner).is_dir()
@@ -206,3 +212,7 @@ def test_unregister_when_nothing_is_registered(fake_runner):
     assert result.exit_code == 0
     assert "nothing registered" in result.output
 
+
+def test_unregister_bad_target(fake_runner):
+    result = cli.invoke(app, ["runner", "unregister-manual", "a/b/c"])
+    assert result.exit_code == 2

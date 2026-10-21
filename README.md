@@ -34,7 +34,8 @@ public runner pool.
 ```
 octopus init                              # guided setup of a runner or coordinator host
 octopus runner setup|allow|start|status|stop   # on runner hosts (laptops)
-octopus runner register-manual|unregister-manual   # plain GitHub runner, one-hour token (docs/manual-runner.md)
+octopus init --role manual                 # plain GitHub runner, one-hour token (docs/manual-runner.md)
+octopus runner unregister-manual <repo>    # remove that runner
 octopus coordinator start|status          # on coordinator hosts (VPS)
 octopus jobs [--failed]                   # list jobs
 octopus logs <job> [-f]                   # job logs

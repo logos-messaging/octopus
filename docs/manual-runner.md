@@ -1,6 +1,6 @@
 # Manual runner: a plain GitHub runner with a one-hour token
 
-`octopus runner register-manual` registers this machine with GitHub using a **registration
+`octopus init --role manual` registers this machine with GitHub using a **registration
 token you copy from the GitHub UI**. Octopus never stores the token and never puts it on a
 command line. Use it to try a workflow on a laptop without giving any Octopus component a
 standing GitHub credential.
@@ -13,25 +13,24 @@ repos you trust, and read [threat-model.md](threat-model.md) first.
 ## Register and run
 
 ```bash
-octopus runner register-manual acme/app          # a repo; or: acme (an org), or a https URL
+octopus init --role manual        # or: octopus init, and answer "manual" to the role question
 ```
 
-1. Octopus prints the page to open (`https://github.com/acme/app/settings/actions/runners/new`).
+1. Octopus asks for the target: a repo (`acme/app`), an org (`acme`) or a https URL.
+2. It prints the page to open (`https://github.com/acme/app/settings/actions/runners/new`).
    Copy the token shown in the `./config.sh` command there.
-2. Paste it at the hidden prompt (or set `OCTOPUS_REGISTRATION_TOKEN` for that one command).
-3. Octopus downloads and verifies the pinned `actions/runner` release (the same one the
+3. Paste it at the hidden prompt (or set `OCTOPUS_REGISTRATION_TOKEN` for that one run). It also
+   asks for extra labels and a runner name; an empty answer takes the default.
+4. Octopus downloads and verifies the pinned `actions/runner` release (the same one the
    coordinator flow uses), registers the runner with the label `octopus`, and runs it in the
    foreground. Ctrl-C stops it; it stays registered.
 
-Run the same command again to start it later: it is already registered, so no token is asked.
+Answer "no" to "Run it now?" to register only. Run `octopus init --role manual` again with the same
+target to start it later: it is already registered, so no token is asked. To register again, remove
+it first (below).
 
-| Option | Meaning |
-|---|---|
-| `--labels L` | Extra labels (repeatable). `self-hosted`, the OS and the arch are added by GitHub, `octopus` by Octopus. |
-| `--name N` | Runner name in GitHub (default: `octopus-manual-<host>`). |
-| `--no-start` | Register only. |
-| `--reconfigure` | Register again (a new token is asked). |
-| `--data-dir D` | Octopus data dir. The runner tree lives in `D/manual-runner/<owner>__<repo>/`. |
+`self-hosted`, the OS and the arch labels are added by GitHub, `octopus` by Octopus. The runner tree
+lives in `<data dir>/manual-runner/<owner>__<repo>/` (`--data-dir` picks another data dir).
 
 A workflow uses it with `runs-on: [self-hosted, octopus]` (add the OS label, such as `macOS`, to
 pick this machine).
