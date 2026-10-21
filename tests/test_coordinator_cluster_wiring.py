@@ -30,6 +30,7 @@ from octopus.coordinator.jobs import State
 from octopus.coordinator.service import Coordinator
 from octopus.crypto.signing import encode_signing_public, generate_signing_key
 from octopus.github.token import TokenClient
+from octopus.proto import FailureReason
 from octopus.transport import MemoryBus, MemoryTransport
 
 FAST = ClusterConfig(heartbeat_s=0.05, dead_after_s=0.4, max_skew_s=60.0)
@@ -68,9 +69,9 @@ def test_config_reads_peers():
 
 
 class Cluster:
-    """Two coordinators that trust each other, one runner that trusts both."""
+    """Two coordinators that trust each other, one runner that trusts both (or no runner)."""
 
-    def __init__(self, tmp_path):
+    def __init__(self, tmp_path, runner=True):
         self.bus = MemoryBus()
         self.github = FakeGitHub()
         self.nodes = {}
@@ -89,6 +90,11 @@ class Cluster:
             fresh.start()
             self.coordinators.append(fresh)
         self.a, self.b = self.coordinators
+        self.agent = None
+        assert wait_for(lambda: self.a.cluster.live() == self.b.cluster.live())
+        assert wait_for(lambda: len(self.a.cluster.live()) == 2)
+        if not runner:
+            return
         allowlist = Allowlist()
         allowlist.add(REPO)
         self.agent = RunnerAgent(
@@ -101,8 +107,6 @@ class Cluster:
         )
         self.agent.start()
         assert wait_for(lambda: len(self.a.registry.online()) == 1)
-        assert wait_for(lambda: self.a.cluster.live() == self.b.cluster.live())
-        assert wait_for(lambda: len(self.a.cluster.live()) == 2)
 
     def _build(self, tmp_path, name, peers):
         client = TokenClient(
@@ -119,7 +123,7 @@ class Cluster:
             retry_delay_s=0.0,
         )
 
-    def deliver(self, coordinator, job_id):
+    def deliver(self, coordinator, job_id, action="queued"):
         import json
 
         from conftest import octopus_job
@@ -128,8 +132,10 @@ class Cluster:
         from octopus.github.webhooks import sign
 
         payload = octopus_job()
-        payload["action"] = "queued"
+        payload["action"] = action
         payload["workflow_job"].update(id=job_id, run_id=RUN_ID)
+        if action == "completed":
+            payload["workflow_job"].update(status="completed", conclusion="cancelled")
         payload["repository"]["full_name"] = REPO
         payload["sender"] = {"login": "alice", "type": "User"}
         body = json.dumps(payload).encode()
@@ -139,7 +145,7 @@ class Cluster:
             content=body,
             headers={
                 "X-GitHub-Event": "workflow_job",
-                "X-GitHub-Delivery": f"d-{job_id}",
+                "X-GitHub-Delivery": f"d-{job_id}-{action}",
                 "X-Hub-Signature-256": sign(SECRET.encode(), body),
             },
         )
@@ -156,7 +162,8 @@ class Cluster:
         return ids
 
     def stop(self):
-        self.agent.stop()
+        if self.agent is not None:
+            self.agent.stop()
         for c in self.coordinators:
             c.stop()
 
@@ -187,3 +194,24 @@ def test_status_shows_cluster_key_and_peers(cluster):
     state = cluster.a.state()
     assert state["cluster_key"] == cluster.a.signing_public
     assert state["peers"] == [cluster.b.coordinator_id]
+
+
+@pytest.fixture
+def idle_cluster(tmp_path):
+    c = Cluster(tmp_path, runner=False)
+    yield c
+    c.stop()
+
+
+def test_cancel_received_by_the_coordinator_that_does_not_own_the_job(idle_cluster):
+    c = idle_cluster
+    job_id = "2004"
+    owner = c.a if c.a.cluster.owner(job_id) == c.a.coordinator_id else c.b
+    other = c.b if owner is c.a else c.a
+    assert c.deliver(other, int(job_id)).status_code == 202
+    assert wait_for(lambda: owner.jobs.get(job_id) is not None)
+    assert owner.jobs.get(job_id).state is State.QUEUED  # no runner: it waits
+    assert c.deliver(other, int(job_id), action="completed").status_code == 202
+    assert wait_for(lambda: owner.jobs.get(job_id).state is State.FAILED)
+    assert owner.jobs.get(job_id).reason is FailureReason.CANCELLED
+    assert c.a.cluster.pending() == [] and c.b.cluster.pending() == []

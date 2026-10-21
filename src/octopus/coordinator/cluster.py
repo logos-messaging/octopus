@@ -6,7 +6,9 @@ of the jobs that no runner has accepted yet. Ownership is decided without coordi
 rendezvous hashing over the coordinators currently alive: the owner of a job adopts it into its
 scheduler and tells the others (`claimed`). When the owner stops heartbeating before a runner
 accepted the job, the next owner in the ranking adopts it from the replica. Once a runner
-accepted the job it runs on its own, so peers forget it (`accepted`/`done`).
+accepted the job it runs on its own, so peers forget it (`accepted`/`done`). When GitHub
+completes a job before it ran, the coordinator that receives that webhook may not own the job,
+so it tells the others (`cancelled`) and the owner drops the job from its scheduler.
 
 All gossip is signed; messages from coordinators that are not in `peers` are dropped, so
 nobody else can inject, claim or cancel jobs. Known limit: during a network partition two
@@ -56,6 +58,8 @@ class _Replica:
 
 
 Adopt = Callable[[CoordJob], None]
+# Drop a job from the local scheduler if it still waits there: (job id, detail).
+Cancel = Callable[[str, str], None]
 
 
 def to_coord_job(
@@ -100,12 +104,14 @@ class CoordinatorCluster:
         adopt: Adopt,
         clock: Clock | None = None,
         config: ClusterConfig | None = None,
+        cancel: Cancel | None = None,
     ) -> None:
         self.coordinator_id = coordinator_id
         self._key = signing_key
         self._peers = {cid: pub for cid, pub in peers.items() if cid != coordinator_id}
         self._transport = transport
         self._adopt = adopt
+        self._cancel = cancel
         self._clock = clock or SystemClock()
         self._config = config or ClusterConfig()
 
@@ -168,6 +174,16 @@ class CoordinatorCluster:
         self._forget(job_id)
         self._send("done", job_id=job_id)
 
+    def cancel(self, job_id: str, detail: str) -> None:
+        """GitHub completed the job before it ran: drop it here and wherever it is queued."""
+        with self._lock:
+            # Accepted or done: the job ran, so this is its normal completion. No gossip.
+            known_over = job_id in self._forgotten
+        if not known_over:
+            self._forget(job_id)
+            self._send("cancelled", job_id=job_id)
+        self._cancel_local(job_id, detail)
+
     # ownership
 
     def live(self) -> list[str]:
@@ -203,6 +219,14 @@ class CoordinatorCluster:
                 self._adopt(r.job)
             except Exception:
                 log.exception("could not adopt job: %s", r.job.job_id)
+
+    def _cancel_local(self, job_id: str, detail: str) -> None:
+        if self._cancel is None:
+            return
+        try:
+            self._cancel(job_id, detail)
+        except Exception:
+            log.exception("could not cancel job: %s", job_id)
 
     def _forget(self, job_id: str) -> None:
         with self._lock:
@@ -241,8 +265,13 @@ class CoordinatorCluster:
                 self._on_queued(msg)
             elif msg.kind == "claimed":
                 self._on_claimed(msg)
-        if msg.kind in ("accepted", "done"):
+        if msg.kind in ("accepted", "done", "cancelled"):
             self._forget(msg.job_id)
+        if msg.kind == "cancelled":
+            self._cancel_local(
+                msg.job_id,
+                f"GitHub completed the job before it ran: reported by coordinator: {msg.coordinator_id}",
+            )
         self._adopt_owned()
 
     def _on_queued(self, msg: CoordMessage) -> None:

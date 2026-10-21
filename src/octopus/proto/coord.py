@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 MAX_COORD_BYTES = 16 * 1024
 
 
-CoordKind = Literal["heartbeat", "queued", "claimed", "accepted", "done"]
+CoordKind = Literal["heartbeat", "queued", "claimed", "accepted", "done", "cancelled"]
 
 
 class CoordContext(BaseModel):
@@ -36,6 +36,7 @@ class CoordMessage(BaseModel):
     - claimed:   the sender is scheduling the job
     - accepted:  a runner accepted the job; it runs on its own, nobody needs to take it over
     - done:      the job reached a terminal state
+    - cancelled: GitHub completed the job before it ran; the coordinator that has it queued drops it
     """
 
     kind: CoordKind

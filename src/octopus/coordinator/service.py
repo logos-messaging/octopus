@@ -155,6 +155,7 @@ class Coordinator:
                     self._transport,
                     self._adopt,
                     config=self._cluster_config,
+                    cancel=self._cancel,
                 )
             self.scheduler = Scheduler(
                 self.registry,
@@ -246,14 +247,17 @@ class Coordinator:
                 raise RuntimeError("trust queue full") from None
         elif event.action == "in_progress":
             self._note_runner(event)
-        elif (
-            event.action == "completed"
-            and self.scheduler is not None
-            and self.scheduler.cancel(
-                str(event.job_id), f"GitHub completed the job before it ran: {event.conclusion}"
-            )
-        ):
-            log.info("job %s cancelled on GitHub while queued", event.job_id)
+        elif event.action == "completed":
+            detail = f"GitHub completed the job before it ran: {event.conclusion}"
+            if self.cluster is not None:
+                # The job may be queued on another coordinator: the cluster tells its owner.
+                self.cluster.cancel(str(event.job_id), detail)
+            else:
+                self._cancel(str(event.job_id), detail)
+
+    def _cancel(self, job_id: str, detail: str) -> None:
+        if self.scheduler is not None and self.scheduler.cancel(job_id, detail):
+            log.info("job %s cancelled on GitHub while queued", job_id)
 
     def _note_runner(self, event: WorkflowJobEvent) -> None:
         """GitHub gives a job to any idle runner with its labels, not to the one Octopus made
