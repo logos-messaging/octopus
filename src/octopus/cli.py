@@ -10,6 +10,7 @@ from .cli_github import github_app
 from .cli_init import add_init
 from .cli_keys import add_coordinator_keygen, root_app
 from .cli_lib import lib_app
+from .cli_manual import add_manual
 
 app = typer.Typer(no_args_is_help=True, help="Octopus: lend your laptop as a CI runner.")
 runner_app = typer.Typer(no_args_is_help=True, help="Commands for runner hosts.")
@@ -21,6 +22,7 @@ app.add_typer(root_app, name="root")
 app.add_typer(lib_app, name="lib")
 add_coordinator_keygen(coordinator_app)
 add_init(app)
+add_manual(runner_app)
 
 
 @app.command()

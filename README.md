@@ -34,6 +34,7 @@ public runner pool.
 ```
 octopus init                              # guided setup of a runner or coordinator host
 octopus runner setup|allow|start|status|stop   # on runner hosts (laptops)
+octopus runner register-manual|unregister-manual   # plain GitHub runner, one-hour token (docs/manual-runner.md)
 octopus coordinator start|status          # on coordinator hosts (VPS)
 octopus jobs [--failed]                   # list jobs
 octopus logs <job> [-f]                   # job logs
@@ -136,6 +137,7 @@ Run the same checks locally with `ruff check . && pytest`.
 - `docs/github-setup.md`: one-repo setup with a token (`octopus github setup`)
 - `docs/coordinator-ops.md`: running a coordinator in production (Docker/systemd, TLS, metrics, rotation); `deploy/` has the files
 - `docs/e2e.md`: the nightly end-to-end test against a real GitHub repo, and how to set it up
+- `docs/manual-runner.md`: a plain GitHub runner on a laptop, no coordinator
 - `docs/threat-model.md`: what Octopus protects against and what it does not; `CONTRIBUTING.md`: how to contribute
 
 ## License
