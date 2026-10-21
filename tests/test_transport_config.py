@@ -19,7 +19,14 @@ def test_coordinator_requires_public_ip():
 
 def test_runner_defaults_use_the_preset():
     o = config.runner_config()["messagingOverrides"]
-    assert "nat" not in o and "entry-node" not in o and o["tcp-port"] == config.DEFAULT_TCP_PORT
+    assert "entry-node" not in o and o["tcp-port"] == config.DEFAULT_TCP_PORT
+
+
+def test_runner_has_no_port_mapping_unless_asked():
+    # The library's default is "any"; its port mapping can crash the node at stop (#64).
+    assert config.runner_config()["messagingOverrides"]["nat"] == "none"
+    assert config.runner_config(nat="any")["messagingOverrides"]["nat"] == "any"
+    assert config.from_env("runner", {})["messagingOverrides"]["nat"] == "none"
 
 
 def test_from_env():
