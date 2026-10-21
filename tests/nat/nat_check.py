@@ -21,14 +21,23 @@ ENTRY_FILE = "/shared/entry"
 DONE_FILE = "/shared/done"
 
 
+def run_topic(entry: str) -> tuple[str, bytes]:
+    """The nodes also join the public network, so use a topic and payload of this run only."""
+    run = entry.rsplit("/", 1)[-1][-12:]
+    return f"/octopus/1/nat-check-{run}/proto", f"via-relay {run}".encode()
+
+
 def run_coordinator() -> None:
     node = ld.NodeWrapper.create_and_start(
         config.coordinator_config(os.environ["OCTOPUS_PUBLIC_IP"])
     ).unwrap()
     addrs = node.get_node_info("MyMultiaddresses").unwrap().split(",")
+    entry = next(a for a in addrs if "/tcp/" in a)
+    # The relay node must be subscribed to the topic to forward it between the runners.
+    node.subscribe_content_topic(run_topic(entry)[0]).unwrap()
     os.makedirs("/shared", exist_ok=True)
     with open(ENTRY_FILE, "w") as f:
-        f.write(next(a for a in addrs if "/tcp/" in a))
+        f.write(entry)
     time.sleep(10**6)
 
 
@@ -47,10 +56,7 @@ def say(msg: str) -> None:
 
 def run_runner() -> None:
     entry = wait_entry()
-    # The nodes also join the public network, so a topic and payload of this run only.
-    run = entry.rsplit("/", 1)[-1][-12:]
-    topic = f"/octopus/1/nat-check-{run}/proto"
-    expected = f"via-relay {run}".encode()
+    topic, expected = run_topic(entry)
     got = []
 
     def on_event(ret, msg):
@@ -84,7 +90,8 @@ def run_runner() -> None:
     say(f"received: {ok}, messages seen: {len(got)}")
     if ok:
         open(DONE_FILE, "w").close()
-    sys.exit(0 if ok else 1)
+    # Interpreter teardown segfaults in liblogosdelivery, which would hide the result.
+    os._exit(0 if ok else 1)
 
 
 (run_coordinator if ROLE == "coordinator" else run_runner)()
