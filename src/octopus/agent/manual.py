@@ -122,13 +122,6 @@ def prepare(
     finally:
         shutil.rmtree(work, ignore_errors=True)
     return directory
-    try:
-        cache = ensure_installed(asset or asset_for(platform_key()), data_dir, client=client)
-    except (RunnerDownloadError, UnsupportedPlatformError) as e:
-        raise ManualRunnerError(f"could not prepare runner: {e}") from e
-    directory.parent.mkdir(parents=True, exist_ok=True)
-    make_job_dir(cache, directory)
-    return directory
 
 
 def _child_env() -> dict[str, str]:
