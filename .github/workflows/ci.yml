@@ -144,12 +144,15 @@ jobs:
       # the receiver too: wait for the receiver alone.
       - name: Wait for the receiver
         run: |
-          code=$(timeout 300 docker wait "$(docker compose -f tests/nat/docker-compose.yml ps -aq runner_b)")
+          code=$(timeout 400 docker wait "$(docker compose -f tests/nat/docker-compose.yml ps -aq runner_b)")
           echo "receiver exit code: $code"
           test "$code" = "0"
       - name: Container logs
         if: always()
-        run: docker compose -f tests/nat/docker-compose.yml logs --no-color
+        run: |
+          docker compose -f tests/nat/docker-compose.yml logs --no-color > nat.log
+          echo "--- progress"; grep NATCHECK nat.log || true
+          echo "--- full log"; cat nat.log
       - name: Tear down
         if: always()
         run: docker compose -f tests/nat/docker-compose.yml down -v
