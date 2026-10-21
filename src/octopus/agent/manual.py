@@ -26,6 +26,7 @@ TOKEN_ENV = "OCTOPUS_REGISTRATION_TOKEN"
 # actions/runner reads its command-line arguments from ACTIONS_RUNNER_INPUT_<NAME>; the
 # token goes there so it is not visible in `ps`.
 _RUNNER_TOKEN_ENV = "ACTIONS_RUNNER_INPUT_TOKEN"
+_SECRET_ENV = (TOKEN_ENV, _RUNNER_TOKEN_ENV)
 DEFAULT_LABELS = ("octopus",)
 _PART = r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?"
 _TARGET = re.compile(rf"^(?P<owner>{_PART})(?:/(?P<repo>{_PART}))?$")
@@ -112,6 +113,15 @@ def prepare(
     return directory
 
 
+def _child_env() -> dict[str, str]:
+    """The environment of the runner processes, without any token.
+
+    Runner.Worker hands its environment to every job step, so a token left in it can be read by
+    any workflow that runs on this runner.
+    """
+    return {k: v for k, v in os.environ.items() if k not in _SECRET_ENV}
+
+
 def _script(directory: Path, name: str) -> list[str]:
     if IS_WINDOWS:
         return ["cmd.exe", "/c", f"{name}.cmd"]
@@ -128,7 +138,7 @@ def _tail(text: str, lines: int = 8) -> str:
 
 
 def _run_config(directory: Path, args: list[str], token: str) -> None:
-    env = dict(os.environ)
+    env = _child_env()
     env[_RUNNER_TOKEN_ENV] = token
     try:
         proc = subprocess.run(
@@ -184,7 +194,7 @@ def remove(directory: Path, token: str) -> None:
 def start(directory: Path) -> int:
     """Run the runner in the foreground until it exits or Ctrl-C. Returns its exit code."""
     try:
-        proc = subprocess.Popen(_script(directory, "run"), cwd=directory)
+        proc = subprocess.Popen(_script(directory, "run"), cwd=directory, env=_child_env())
     except OSError as e:
         raise ManualRunnerError(f"could not start run script: {directory}: {e}") from e
     try:

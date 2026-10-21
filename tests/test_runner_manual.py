@@ -26,6 +26,7 @@ fi
 echo '{}' > "$(dirname "$0")/.runner"
 """
 RUN_SH = """#!/bin/sh
+env > "$(dirname "$0")/run.env"
 echo started > "$(dirname "$0")/run.marker"
 exit "${FAKE_RUN_EXIT:-0}"
 """
@@ -185,6 +186,21 @@ def test_role_is_asked_and_manual_is_one_answer(fake_runner):
     result = cli.invoke(app, ["init"], input="\n".join(["manual", *fresh(run="n")]) + "\n")
     assert result.exit_code == 0, result.output
     assert (runner_tree(fake_runner) / ".runner").exists()
+
+
+def test_tokens_are_not_in_the_environment_of_the_runner(fake_runner, monkeypatch):
+    # Runner.Worker gives its environment to every job step: a token there is readable by any
+    # workflow, and a registration token lets a workflow register another runner.
+    monkeypatch.setenv(manual.TOKEN_ENV, TOKEN)
+    monkeypatch.setenv("ACTIONS_RUNNER_INPUT_TOKEN", TOKEN)
+    result = init_manual("acme/app", "", "", "y")
+    assert result.exit_code == 0, result.output
+    run_env = (runner_tree(fake_runner) / "run.env").read_text()
+    assert TOKEN not in run_env
+    assert manual.TOKEN_ENV not in run_env
+    assert "ACTIONS_RUNNER_INPUT_TOKEN" not in run_env
+    # config.sh does get the token, and only through its own variable
+    assert (runner_tree(fake_runner) / "config.token").read_text() == TOKEN
 
 
 # unregister-manual
