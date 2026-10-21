@@ -25,6 +25,13 @@ posix_only = pytest.mark.skipif(os.name == "nt", reason="fake runner is a POSIX 
 JIT = "eyJ0b3AtLXNlY3JldCJ9-jit-config"
 
 RUN_SH = """#!/bin/sh
+if [ "$FAKE_MODE" = idle ]; then
+  echo "Listening for Jobs"
+  sleep 60 &
+  echo $! > "$FAKE_PIDFILE"
+  echo "$$" >> "$FAKE_PIDFILE"
+  wait
+fi
 echo "Running job: build"
 echo "config=$ACTIONS_RUNNER_INPUT_JITCONFIG args=$*"
 case "$FAKE_MODE" in
@@ -270,6 +277,35 @@ def test_timeout_kills_process_tree(tmp_path, serve, fake_archive, monkeypatch):
     pids = [int(p) for p in pidfile.read_text().split()]
     assert len(pids) == 2 and wait_dead(pids)
     assert job_dirs(tmp_path) == []
+
+
+@posix_only
+def test_runner_with_no_job_is_stopped_and_frees_the_slot(tmp_path, serve, fake_archive, monkeypatch):
+    # GitHub gave the JIT runner no job: the run was cancelled, or another runner took it (#73).
+    pidfile = tmp_path / "pids"
+    monkeypatch.setenv("FAKE_MODE", "idle")
+    monkeypatch.setenv("FAKE_PIDFILE", str(pidfile))
+    server = serve(fake_archive)
+    result = manager(tmp_path, server, fake_archive, job_start_seconds=1).run_job("j1", JIT)
+    assert result.failure == FailureReason.CANCELLED and not result.timed_out
+    assert "no job in 1 s" in result.detail
+    pids = [int(p) for p in pidfile.read_text().split()]
+    assert len(pids) == 2 and wait_dead(pids)
+    assert job_dirs(tmp_path) == []
+
+
+@posix_only
+def test_a_job_that_started_is_not_stopped_by_the_start_timeout(
+    tmp_path, serve, fake_archive, monkeypatch
+):
+    pidfile = tmp_path / "pids"
+    monkeypatch.setenv("FAKE_MODE", "hang")
+    monkeypatch.setenv("FAKE_PIDFILE", str(pidfile))
+    server = serve(fake_archive)
+    result = manager(
+        tmp_path, server, fake_archive, job_start_seconds=0.5, max_job_seconds=2
+    ).run_job("j1", JIT)
+    assert result.timed_out and result.failure == FailureReason.JOB_FAILED
 
 
 @posix_only

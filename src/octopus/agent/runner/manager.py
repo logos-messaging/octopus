@@ -18,6 +18,9 @@ from .release import RunnerAsset, asset_for, platform_key
 log = logging.getLogger(__name__)
 
 DEFAULT_MAX_JOB_SECONDS = 6 * 60 * 60
+# GitHub gives a queued job to an idle runner with its labels in seconds. A JIT runner with no
+# job after this time will get none: the job was cancelled or ran on another runner (#73).
+DEFAULT_JOB_START_SECONDS = 10 * 60
 _REDACTED = "***"
 
 
@@ -40,6 +43,7 @@ class RunnerManager:
         asset: RunnerAsset | None = None,
         clock: Clock | None = None,
         max_job_seconds: float = DEFAULT_MAX_JOB_SECONDS,
+        job_start_seconds: float = DEFAULT_JOB_START_SECONDS,
         client: httpx.Client | None = None,
         pass_jit_as_arg: bool = False,
     ) -> None:
@@ -47,6 +51,7 @@ class RunnerManager:
         self._asset = asset
         self._clock = clock or SystemClock()
         self._max_job_seconds = max_job_seconds
+        self._job_start_seconds = job_start_seconds
         self._client = client
         self._pass_jit_as_arg = pass_jit_as_arg
         self._stop = threading.Event()
@@ -97,6 +102,7 @@ class RunnerManager:
                     job_dir,
                     jit_config,
                     timeout_s=self._max_job_seconds,
+                    start_timeout_s=self._job_start_seconds,
                     stop=self._stop,
                     on_output=emit,
                     pass_as_arg=self._pass_jit_as_arg,
@@ -104,7 +110,7 @@ class RunnerManager:
             except OSError as e:
                 detail = f"could not start runner: {scrub(str(e))}"
                 return RunResult(None, FailureReason.RUNNER_START_FAILED, detail, elapsed())
-            return self._result(outcome, elapsed(), scrub)
+            return self._result(outcome, elapsed(), scrub, self._job_start_seconds)
         except Exception as e:  # noqa: BLE001 - report instead of crashing the agent
             log.error("could not run job: %s: %s", job_id, scrub(str(e)))
             return RunResult(None, FailureReason.RUNNER_START_FAILED, scrub(str(e)), elapsed())
@@ -112,7 +118,15 @@ class RunnerManager:
             shutil.rmtree(job_root, ignore_errors=True)
 
     @staticmethod
-    def _result(outcome, duration: float, scrub) -> RunResult:
+    def _result(outcome, duration: float, scrub, job_start_seconds: float) -> RunResult:
+        if outcome.no_job:
+            return RunResult(
+                outcome.exit_code,
+                FailureReason.CANCELLED,
+                f"GitHub gave the runner no job in {job_start_seconds:.0f} s: "
+                "the job was cancelled, or it ran on another runner",
+                duration,
+            )
         if outcome.timed_out:
             return RunResult(
                 outcome.exit_code,

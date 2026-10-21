@@ -16,6 +16,8 @@ IS_WINDOWS = os.name == "nt"
 JIT_ENV = "ACTIONS_RUNNER_INPUT_JITCONFIG"
 _KILL_GRACE_S = 5
 _LINKED_DIRS = ("bin", "externals")  # read-only runtime, hard-linked instead of copied
+# Runner.Listener prints "<utc time>: Running job: <name>" when GitHub gives it a job.
+JOB_STARTED = "Running job: "
 
 OutputHandler = Callable[[str], None]
 
@@ -26,6 +28,8 @@ class ProcessOutcome:
     timed_out: bool = False
     stopped: bool = False
     last_line: str = ""
+    # GitHub gave the runner no job before `start_timeout_s`.
+    no_job: bool = False
 
 
 def make_job_dir(cache: Path, job_dir: Path) -> None:
@@ -82,8 +86,12 @@ def run_runner(
     on_output: OutputHandler,
     pass_as_arg: bool = False,
     on_started: Callable[[subprocess.Popen], None] | None = None,
+    start_timeout_s: float | None = None,
 ) -> ProcessOutcome:
-    """Run the runner in `job_dir` and wait for it. Raises OSError if it cannot start."""
+    """Run the runner in `job_dir` and wait for it. Raises OSError if it cannot start.
+
+    With `start_timeout_s`, the runner is stopped when it shows no job in that time.
+    """
     script = "run.cmd" if IS_WINDOWS else "run.sh"
     cmd = ["cmd.exe", "/c", script] if IS_WINDOWS else [str(job_dir / script)]
     env = dict(os.environ)
@@ -110,6 +118,7 @@ def run_runner(
     if on_started is not None:
         on_started(proc)
     last = {"line": ""}
+    job_started = threading.Event()
 
     def pump() -> None:
         assert proc.stdout is not None
@@ -117,6 +126,8 @@ def run_runner(
             line = raw.rstrip("\r\n")
             if line.strip():
                 last["line"] = line
+            if JOB_STARTED in line:
+                job_started.set()
             try:
                 on_output(line)
             except Exception as e:  # noqa: BLE001 - a failing consumer must not kill the job
@@ -125,7 +136,7 @@ def run_runner(
     reader = threading.Thread(target=pump, name="octopus-runner-output", daemon=True)
     reader.start()
 
-    timed_out = stopped = False
+    timed_out = stopped = no_job = False
     waited = 0.0
     while True:
         try:
@@ -137,7 +148,11 @@ def run_runner(
             stopped = True
         elif waited >= timeout_s:
             timed_out = True
-        if stopped or timed_out:
+        elif (
+            start_timeout_s is not None and waited >= start_timeout_s and not job_started.is_set()
+        ):
+            no_job = True
+        if stopped or timed_out or no_job:
             kill_tree(proc)
             proc.wait()
             break
@@ -149,4 +164,5 @@ def run_runner(
         timed_out=timed_out,
         stopped=stopped,
         last_line=last["line"],
+        no_job=no_job,
     )
