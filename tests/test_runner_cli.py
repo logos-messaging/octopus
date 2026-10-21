@@ -374,6 +374,32 @@ def test_runner_markers_become_step_statuses(tmp_path):
     w.agent.stop()
 
 
+def test_a_failed_job_is_reported_although_the_runner_exits_0(tmp_path):
+    # actions/runner exits 0 after a job, whatever the job's result was.
+    output = [
+        "2026-10-20 10:00:00Z: Running job: build",
+        "2026-10-20 10:00:09Z: Job build completed with result: Failed",
+    ]
+    w = World(tmp_path, manager=FakeManager(output=output), log_drain_s=5)
+    watch_logs(w)
+    w.offer()
+    assert wait_for(lambda: any(s.state == "finished" for s in w.statuses))
+    final = w.statuses[-1]
+    assert (final.exit_code, final.reason) == (0, FailureReason.JOB_FAILED)
+    assert final.detail == "job build completed with result: Failed"
+    w.agent.stop()
+
+
+def test_a_succeeded_job_has_no_failure(tmp_path):
+    output = ["2026-10-20 10:00:09Z: Job build completed with result: Succeeded"]
+    w = World(tmp_path, manager=FakeManager(output=output), log_drain_s=5)
+    watch_logs(w)
+    w.offer()
+    assert wait_for(lambda: any(s.state == "finished" for s in w.statuses))
+    assert (w.statuses[-1].reason, w.statuses[-1].detail) == (None, None)
+    w.agent.stop()
+
+
 def test_slot_is_freed_before_the_log_drains(tmp_path):
     w = World(tmp_path, manager=FakeManager(output=["x"]), log_drain_s=2)
     # Nobody collects this log, so the drain runs to its limit.

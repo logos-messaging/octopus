@@ -87,6 +87,8 @@ class JobStatus(BaseModel):
     step: str | None = None
     exit_code: int | None = None
     reason: FailureReason | None = None
+    # Human-readable why a finished job failed, shown by `octopus explain`; never secrets.
+    detail: str | None = None
 
 
 # A chunk's text is at most this many UTF-8 bytes, so even fully JSON-escaped it stays well

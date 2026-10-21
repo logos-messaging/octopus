@@ -1,0 +1,10 @@
+name: octopus-e2e-pass
+on:
+  push:
+    branches: ["octopus-e2e/pass/**"]
+jobs:
+  pass:
+    runs-on: [self-hosted, octopus]
+    timeout-minutes: 10
+    steps:
+      - run: echo "octopus-e2e pass"

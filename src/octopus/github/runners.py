@@ -204,8 +204,12 @@ class JitRunners:
 
 
 def runner_name(runner_id: str, job_id: str, attempt: int) -> str:
-    """Unique per (runner, job, attempt) so a retried job never collides with its old runner."""
-    return f"{NAME_PREFIX}{runner_id[:8]}-{job_id[:8]}-{attempt}"
+    """Unique per (runner, job, attempt) so a retried job never collides with its old runner.
+
+    The whole job id is kept: GitHub gives job ids in sequence, so the jobs of one push
+    often have the same first digits.
+    """
+    return f"{NAME_PREFIX}{runner_id[:8]}-{job_id}-{attempt}"
 
 
 def make_jit_provider(

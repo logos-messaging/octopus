@@ -1,0 +1,10 @@
+name: octopus-e2e-fail
+on:
+  push:
+    branches: ["octopus-e2e/fail/**"]
+jobs:
+  fail:
+    runs-on: [self-hosted, octopus]
+    timeout-minutes: 10
+    steps:
+      - run: echo "octopus-e2e fail"; exit 3
