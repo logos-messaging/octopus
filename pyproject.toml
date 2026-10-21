@@ -39,8 +39,11 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["needs_lib: requires a built liblogosdelivery (see README)"]
-addopts = "-m 'not needs_lib'"
+markers = [
+  "needs_lib: requires a built liblogosdelivery (see README)",
+  "e2e: runs against a real GitHub repo and needs liblogosdelivery (see docs/e2e.md)",
+]
+addopts = "-m 'not needs_lib and not e2e'"
 
 [tool.ruff]
 line-length = 100

@@ -113,6 +113,7 @@ Node mode: coordinators run `Core` (relay, public IP); runners on laptops can us
 | `lint` | Linux | `ruff check .` |
 | `test` | Linux (Python 3.10 to 3.14), macOS and Windows (3.10, 3.14) | `pytest` (unit tests, without `needs_lib`) |
 | `needs_lib` | Linux, macOS | builds `liblogosdelivery` from the logos-delivery commit pinned by the bindings (cached per commit), then `pytest -m needs_lib` |
+| `E2E nightly` (`e2e.yml`) | Linux, every night | a coordinator and a runner against a real GitHub repo: `pytest -m e2e` ([docs/e2e.md](docs/e2e.md)) |
 
 Windows runs unit tests only: the bindings load `lib/liblogosdelivery.so`, so the library tests
 need Windows support in the bindings first. A weekly job (`bump-bindings.yml`) opens a PR that
@@ -131,6 +132,7 @@ Run the same checks locally with `ruff check . && pytest`.
 - `docs/architecture.md`: design; `docs/github-app.md`: GitHub App setup; `docs/issues/`: the issue specs
 - `docs/github-setup.md`: one-repo setup with a token (`octopus github setup`)
 - `docs/coordinator-ops.md`: running a coordinator in production (Docker/systemd, TLS, metrics, rotation); `deploy/` has the files
+- `docs/e2e.md`: the nightly end-to-end test against a real GitHub repo, and how to set it up
 - `docs/threat-model.md`: what Octopus protects against and what it does not; `CONTRIBUTING.md`: how to contribute
 
 ## License
