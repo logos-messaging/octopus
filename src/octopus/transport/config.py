@@ -12,6 +12,7 @@ PUBLIC_IP_ENV = "OCTOPUS_PUBLIC_IP"
 TCP_PORT_ENV = "OCTOPUS_TCP_PORT"
 NAT_ENV = "OCTOPUS_NAT"
 ROOT_KEY_ENV = "OCTOPUS_ROOT_KEY"
+RUNNER_DEFAULT_NAT = "none"
 
 
 def _base(tcp_port: int, entry_nodes: Sequence[str], nat: str | None) -> dict:
@@ -47,9 +48,11 @@ def runner_config(
 ) -> dict:
     """A runner dials out, so a plain NAT works. `entry_nodes` are extra connections, added to the default fleet nodes.
 
-    `nat` is e.g. "any" to try UPnP/NAT-PMP.
+    `nat` is e.g. "any" to try UPnP/NAT-PMP. The default is "none": the library's own
+    default is "any", and its port-mapping service often crashes the node when it stops
+    (#64). A runner does not need a port mapping, because the coordinators relay for it.
     """
-    return _base(tcp_port, entry_nodes, nat)
+    return _base(tcp_port, entry_nodes, nat or RUNNER_DEFAULT_NAT)
 
 
 def from_env(role: str, env: Mapping[str, str] | None = None) -> dict:

@@ -16,6 +16,7 @@ its own `/octopus/1/...` content topics. Coordinators are still needed for GitHu
 
 ## Runner (laptop, behind NAT)
 - `runner_config(entry_nodes=(), nat=None|"any")` (entry nodes optional). It dials out, so a plain NAT works without port forwarding: the coordinator relays gossip to it.
+- Without `nat` (or `OCTOPUS_NAT`), a runner uses `nat = "none"`. The library's own default is `"any"` (UPnP/NAT-PMP), and its port-mapping service often crashes the node when it stops (#64).
 - `nat="any"` additionally tries UPnP/NAT-PMP.
 - Mode is `Core`. `Edge` (client-only) would save resources but has not been evaluated.
 
