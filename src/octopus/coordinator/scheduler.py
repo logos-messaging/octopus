@@ -78,9 +78,15 @@ class LogSink(Protocol):
     def unwatch(self, job_id: str, runner_id: str) -> None: ...
 
 
+# GitHub keeps a job for a self-hosted runner in its queue for up to 24 hours. A job waits
+# that long for an idle runner, so a busy runner does not lose it. The `completed` webhook
+# ends the wait earlier (`Scheduler.cancel`).
+QUEUE_TIMEOUT_S = 24 * 3600.0
+
+
 @dataclass(frozen=True)
 class SchedulerConfig:
-    queue_timeout_s: float = 300.0
+    queue_timeout_s: float = QUEUE_TIMEOUT_S
     offer_ttl_s: float = 30.0
     # Offers (or runner losses) a job may burn before it fails.
     max_attempts: int = 3

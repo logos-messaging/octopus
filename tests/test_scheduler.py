@@ -241,6 +241,20 @@ def test_queue_timeout_fails_no_idle_runner():
     assert job.state is State.FAILED and job.reason is FailureReason.NO_IDLE_RUNNER
 
 
+def test_job_waits_for_a_busy_runner_by_default():
+    # GitHub keeps the job queued, so a runner that is busy for a long job must get it later.
+    env = Env()
+    env.registry.add("r1", busy=1)
+    env.scheduler.submit("j1", "acme/app")
+    env.scheduler.tick()
+    env.clock.advance(2 * 3600)
+    env.scheduler.tick()
+    assert env.state("j1") is State.QUEUED
+    env.registry.add("r1")  # the runner is idle again
+    env.scheduler.tick()
+    assert env.state("j1") is State.ACKED
+
+
 def test_runner_lost_requeues_then_runner_lost_at_cap():
     env = Env(max_attempts=2)
     env.registry.add("a")
