@@ -10,6 +10,7 @@ SPEC = service.ServiceSpec(
     argv=("/opt/my venv/bin/python", "-m", "octopus", "runner", "start", "--config", "/c/r.json"),
     env={"OCTOPUS_BINDINGS": "/b"},
 )
+SPEC_WD = service.ServiceSpec(argv=SPEC.argv, env=SPEC.env, workdir="/d")
 
 
 class FakeRun:
@@ -125,3 +126,39 @@ def test_cli_commands_exist():
     out = CliRunner().invoke(app, ["runner", "--help"]).output
     for name in ("install-service", "uninstall-service", "service-status"):
         assert name in out
+
+
+def test_runner_spec_makes_paths_absolute_and_sets_workdir(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    spec = service.runner_spec(None, {"OCTOPUS_DATA_DIR": "rel-data"})
+    assert spec.env["OCTOPUS_DATA_DIR"] == str((tmp_path / "rel-data").resolve())
+    assert spec.workdir == spec.env["OCTOPUS_DATA_DIR"]
+    assert Path(service.runner_spec(None, {}).workdir).is_absolute()
+
+
+def test_workdir_is_set_for_every_service_manager():
+    import plistlib
+
+    assert (
+        plistlib.loads(service.render_launchd(SPEC_WD, Path("/l")).encode())["WorkingDirectory"]
+        == "/d"
+    )
+    assert "WorkingDirectory=/d\n" in service.render_systemd(SPEC_WD)
+    assert "<WorkingDirectory>/d</WorkingDirectory>" in service.render_task_xml(SPEC_WD)
+
+
+def test_install_creates_the_workdir(tmp_path):
+    spec = service.ServiceSpec(argv=("py",), workdir=str(tmp_path / "data"))
+    service.install(spec, "linux", tmp_path, FakeRun())
+    assert (tmp_path / "data").is_dir()
+
+
+def test_systemd_escapes_dollar_and_percent():
+    spec = service.ServiceSpec(argv=("/opt/$x/%h/py", "-m", "octopus"))
+    assert "/opt/$$x/%%h/py" in service.render_systemd(spec)
+
+
+def test_install_script_puts_the_extra_before_the_url():
+    script = (Path(__file__).parent.parent / "scripts" / "install.sh").read_text()
+    assert 'SPEC="octopus[logos] @ git+' in script
+    assert "$SPEC[logos]" not in script

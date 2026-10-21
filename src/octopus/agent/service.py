@@ -6,6 +6,7 @@ never touch the host's service manager.
 
 from __future__ import annotations
 
+import getpass
 import os
 import plistlib
 import subprocess
@@ -34,6 +35,9 @@ class ServiceError(RuntimeError):
 class ServiceSpec:
     argv: tuple[str, ...]
     env: Mapping[str, str] = field(default_factory=dict)
+    # Services start in `/` (launchd) or C:\Windows\System32 (Task Scheduler): give them a
+    # directory the user can write, so nothing relative lands in a system directory.
+    workdir: str | None = None
 
 
 @dataclass(frozen=True)
@@ -53,12 +57,18 @@ def runner_spec(
     config: Path | None = None, environ: Mapping[str, str] | None = None
 ) -> ServiceSpec:
     """The command the service runs: this interpreter, so a venv or pipx install keeps working."""
+    from .runner import default_data_dir
+
     environ = os.environ if environ is None else environ
     argv = [sys.executable, "-m", "octopus", "runner", "start"]
     if config is not None:
         argv += ["--config", str(config.expanduser().resolve())]
-    env = {k: environ[k] for k in PASSTHROUGH_ENV if environ.get(k)}
-    return ServiceSpec(argv=tuple(argv), env=env)
+    # Paths are made absolute: the service does not start in the installing shell's directory.
+    env = {
+        k: str(Path(environ[k]).expanduser().resolve()) for k in PASSTHROUGH_ENV if environ.get(k)
+    }
+    workdir = env.get("OCTOPUS_DATA_DIR") or str(default_data_dir().resolve())
+    return ServiceSpec(argv=tuple(argv), env=env, workdir=workdir)
 
 
 # rendering
@@ -76,13 +86,15 @@ def render_launchd(spec: ServiceSpec, log_path: Path) -> str:
         "StandardOutPath": str(log_path),
         "StandardErrorPath": str(log_path),
     }
+    if spec.workdir:
+        plist["WorkingDirectory"] = spec.workdir
     if spec.env:
         plist["EnvironmentVariables"] = dict(spec.env)
     return plistlib.dumps(plist).decode("utf-8")
 
 
 def _systemd_quote(arg: str) -> str:
-    escaped = arg.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%")
+    escaped = arg.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%").replace("$", "$$")
     return f'"{escaped}"' if any(c in arg for c in " \t\"'\\") else escaped
 
 
@@ -91,6 +103,7 @@ def render_systemd(spec: ServiceSpec) -> str:
     env_lines = "".join(
         f"Environment={_systemd_quote(f'{k}={v}')}\n" for k, v in sorted(spec.env.items())
     )
+    workdir_line = f"WorkingDirectory={_systemd_quote(spec.workdir)}\n" if spec.workdir else ""
     prevent = " ".join(str(c) for c in NO_RESTART_EXIT_CODES)
     return (
         "[Unit]\n"
@@ -101,6 +114,7 @@ def render_systemd(spec: ServiceSpec) -> str:
         "\n"
         "[Service]\n"
         "Type=simple\n"
+        f"{workdir_line}"
         f"{env_lines}"
         f"ExecStart={exec_start}\n"
         "Restart=on-failure\n"
@@ -116,6 +130,9 @@ def render_systemd(spec: ServiceSpec) -> str:
 def render_task_xml(spec: ServiceSpec) -> str:
     command, *args = spec.argv
     arguments = subprocess.list2cmdline(args)
+    workdir = (
+        f"    <WorkingDirectory>{escape(spec.workdir)}</WorkingDirectory>\n" if spec.workdir else ""
+    )
     return (
         '<?xml version="1.0" encoding="UTF-16"?>\n'
         '<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">\n'
@@ -131,6 +148,7 @@ def render_task_xml(spec: ServiceSpec) -> str:
         '  <Actions Context="Author"><Exec>\n'
         f"    <Command>{escape(command)}</Command>\n"
         f"    <Arguments>{escape(arguments)}</Arguments>\n"
+        f"{workdir}"
         "  </Exec></Actions>\n"
         "</Task>\n"
     )
@@ -186,6 +204,8 @@ def install(
 ) -> ServiceResult:
     platform = platform or current_platform()
     home = home or Path.home()
+    if spec.workdir:
+        Path(spec.workdir).mkdir(parents=True, exist_ok=True)
     if platform == "darwin":
         return _install_launchd(spec, home, run, os.getuid() if uid is None else uid)
     if platform == "linux":
@@ -217,11 +237,11 @@ def _install_systemd(spec: ServiceSpec, home: Path, run: Run) -> ServiceResult:
         "could not enable the systemd unit",
     )
     notes = [f"logs: journalctl --user -u {SYSTEMD_UNIT} -f"]
-    linger = run(["loginctl", "show-user", os.environ.get("USER", ""), "-p", "Linger"])
+    user = getpass.getuser()
+    linger = run(["loginctl", "show-user", user, "-p", "Linger"])
     if linger.returncode != 0 or "Linger=yes" not in linger.stdout:
         notes.append(
-            "to start at boot without logging in, an admin must run: "
-            f"loginctl enable-linger {os.environ.get('USER', '$USER')}"
+            f"to start at boot without logging in, an admin must run: loginctl enable-linger {user}"
         )
     return ServiceResult(path, tuple(notes))
 
@@ -237,7 +257,7 @@ def _install_task(spec: ServiceSpec, home: Path, run: Run) -> ServiceResult:
     finally:
         xml_path.unlink(missing_ok=True)
     _check(run(["schtasks", "/Run", "/TN", TASK_NAME]), "could not start the scheduled task")
-    notes = ["starts at logon; restarts on failure"]
+    notes = ["starts at logon; a crashed runner is not restarted until the next logon"]
     if spec.env:
         notes.append(
             "environment variables are not passed to a scheduled task: set them for your user "
