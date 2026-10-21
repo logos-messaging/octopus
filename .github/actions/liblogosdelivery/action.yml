@@ -1,0 +1,49 @@
+name: liblogosdelivery
+description: >
+  Builds liblogosdelivery from the logos-delivery commit that the bindings pin, and puts it
+  where the bindings load it. The build is cached for each commit. The caller must check out
+  this repo with its submodules first.
+
+runs:
+  using: composite
+  steps:
+    # logos-delivery marks its own submodules update=none, so init only this one.
+    - name: Checkout the pinned logos-delivery
+      shell: bash
+      working-directory: vendor/logos-delivery-python-bindings
+      run: git submodule update --init --checkout vendor/logos-delivery
+
+    - name: Pinned logos-delivery commit
+      id: pin
+      shell: bash
+      working-directory: vendor/logos-delivery-python-bindings
+      run: echo "sha=$(git rev-parse HEAD:vendor/logos-delivery)" >> "$GITHUB_OUTPUT"
+
+    - name: Restore the built library
+      id: libcache
+      uses: actions/cache@v4
+      with:
+        path: |
+          vendor/logos-delivery-python-bindings/vendor/logos-delivery/build/liblogosdelivery.so
+          vendor/logos-delivery-python-bindings/vendor/logos-delivery/build/liblogosdelivery.dylib
+        key: liblogosdelivery-${{ runner.os }}-${{ runner.arch }}-${{ steps.pin.outputs.sha }}
+
+    # Only the long part (Nim, nimble deps, compile) is skipped on a cache hit.
+    - name: Build liblogosdelivery
+      if: steps.libcache.outputs.cache-hit != 'true'
+      shell: bash
+      working-directory: vendor/logos-delivery-python-bindings/vendor/logos-delivery
+      run: |
+        make build-deps
+        make DISABLE_RLN=true liblogosdelivery
+
+    - name: Install the library where the bindings load it
+      shell: bash
+      working-directory: vendor/logos-delivery-python-bindings
+      run: |
+        mkdir -p lib
+        for f in vendor/logos-delivery/build/liblogosdelivery.so vendor/logos-delivery/build/liblogosdelivery.dylib; do
+          if [ -f "$f" ]; then cp "$f" lib/; fi
+        done
+        if [ -f lib/liblogosdelivery.dylib ]; then ln -sf liblogosdelivery.dylib lib/liblogosdelivery.so; fi
+        ls -l lib
