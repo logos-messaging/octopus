@@ -161,3 +161,19 @@ def test_requeue_edge(store, state):
         store.transition("rq", s, actor="t")
     store.transition("rq", State.QUEUED, actor="t", detail="retry")
     assert store.get("rq").state == State.QUEUED
+
+
+def test_runner_names_and_aliases(tmp_path):
+    from octopus.coordinator.jobs import SqliteJobStore
+
+    store = SqliteJobStore(str(tmp_path / "jobs.db"))
+    assert store.job_for_runner("octopus-r-1-0") is None
+    store.record_runner("octopus-r-1-0", "1001")
+    assert store.job_for_runner("octopus-r-1-0") == "1001"
+
+    assert store.resolve("2002") == "2002" and store.viewed_as("1001") == "1001"
+    store.set_alias("2002", "1001")
+    assert store.resolve("2002") == "1001" and store.viewed_as("1001") == "2002"
+    store.set_alias("2002", "2002")  # back to itself: the alias goes away
+    assert store.resolve("2002") == "2002"
+    store.close()

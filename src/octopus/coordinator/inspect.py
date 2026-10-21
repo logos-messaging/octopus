@@ -71,15 +71,17 @@ class Inspector:
         limit: int = 50,
     ) -> list[dict]:
         rows = self.jobs.list(failed=failed, running=running, repo=repo, limit=limit)
-        return [job_dict(j) for j in rows]
+        # A job's records can be kept under another job's id (issue #58): show GitHub's id.
+        return [{**job_dict(j), "id": self.jobs.viewed_as(j.id)} for j in rows]
 
     def explain(self, job_id: str, lines: int = 20) -> dict | None:
-        job = self.jobs.get(job_id)
+        data_id = self.jobs.resolve(job_id)
+        job = self.jobs.get(data_id)
         if job is None:
             return None
-        timeline = self.jobs.timeline(job_id)
+        timeline = self.jobs.timeline(data_id)
         failure = next((e for e in reversed(timeline) if e.reason is not None), None)
-        data = job_dict(job)
+        data = {**job_dict(job), "id": job_id}
         data["timeline"] = [
             {
                 "ts": e.ts,
@@ -121,7 +123,7 @@ class Inspector:
     def log_chunks(self, job_id: str, runner_id: str | None = None, start: int = 0):
         if self.logs is None:
             return iter(())
-        return self.logs.read(job_id, start, runner_id=runner_id)
+        return self.logs.read(self.jobs.resolve(job_id), start, runner_id=runner_id)
 
     def follow(
         self,
@@ -140,6 +142,7 @@ class Inspector:
         moves to another runner the new attempt's log follows a note. A finished job whose
         log stopped changing `idle_s` ago ends with a note that it is incomplete.
         """
+        job_id = self.jobs.resolve(job_id)
         position, current = 0, runner_id
         while True:
             st = self.logs.state(job_id, runner_id) if self.logs is not None else None

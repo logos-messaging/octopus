@@ -57,3 +57,25 @@ class JobStore(ABC):
     @abstractmethod
     def purge(self, older_than_s: float) -> int:
         """Delete terminal jobs (and events) not updated for `older_than_s`."""
+
+    # GitHub does not bind a JIT runner to the job it was made for: the job GitHub runs on a
+    # runner can be another one. `record_runner` remembers which job each runner was made for;
+    # `set_alias(A, B)` says that GitHub job A ran on the runner made for B, so A's records are
+    # kept under B. Readers resolve a GitHub job id with `resolve`.
+
+    @abstractmethod
+    def record_runner(self, runner_name: str, job_id: str) -> None: ...
+
+    @abstractmethod
+    def job_for_runner(self, runner_name: str) -> str | None: ...
+
+    @abstractmethod
+    def set_alias(self, job_id: str, data_id: str) -> None: ...
+
+    @abstractmethod
+    def resolve(self, job_id: str) -> str:
+        """The id the records of GitHub job `job_id` are kept under."""
+
+    @abstractmethod
+    def viewed_as(self, data_id: str) -> str:
+        """The GitHub job whose records are kept under `data_id`."""
