@@ -8,7 +8,7 @@ set -eu
 
 REPO="https://github.com/logos-messaging/octopus"
 REF="${OCTOPUS_REF:-main}"
-SPEC="octopus @ git+${REPO}@${REF}"
+SPEC="octopus[logos] @ git+${REPO}@${REF}"
 
 die() { echo "error: $*" >&2; exit 1; }
 
@@ -24,17 +24,17 @@ done
 
 if command -v pipx >/dev/null 2>&1; then
   echo "installing with pipx"
-  pipx install --force --python "$PYTHON" "$SPEC[logos]"
+  pipx install --force --python "$PYTHON" "$SPEC"
 elif command -v uv >/dev/null 2>&1; then
   echo "installing with uv"
-  uv tool install --force --python "$PYTHON" "$SPEC[logos]"
+  uv tool install --force --python "$PYTHON" "$SPEC"
 else
   echo "installing into a private virtualenv"
   VENV="${OCTOPUS_HOME:-$HOME/.local/share/octopus}/venv"
   BIN="$HOME/.local/bin"
   "$PYTHON" -m venv "$VENV"
   "$VENV/bin/pip" install --quiet --upgrade pip
-  "$VENV/bin/pip" install --quiet --upgrade "$SPEC[logos]"
+  "$VENV/bin/pip" install --quiet --upgrade "$SPEC"
   mkdir -p "$BIN"
   ln -sf "$VENV/bin/octopus" "$BIN/octopus"
   case ":$PATH:" in
