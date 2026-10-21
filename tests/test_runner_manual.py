@@ -188,6 +188,26 @@ def test_role_is_asked_and_manual_is_one_answer(fake_runner):
     assert (runner_tree(fake_runner) / ".runner").exists()
 
 
+def test_a_failed_copy_leaves_no_tree_behind(fake_runner, monkeypatch):
+    real = manual.make_job_dir
+
+    def half(cache, dest):
+        real(cache, dest)
+        raise OSError("disk full")
+
+    monkeypatch.setattr(manual, "make_job_dir", half)
+    result = init_manual(*fresh())
+    assert result.exit_code == 1
+    assert "could not copy runner" in result.output
+    assert not runner_tree(fake_runner).exists()
+    assert not list((fake_runner / "manual-runner").glob(".prepare-*"))
+    # the next run starts from scratch and works
+    monkeypatch.setattr(manual, "make_job_dir", real)
+    result = init_manual(*fresh())
+    assert result.exit_code == 0, result.output
+    assert (runner_tree(fake_runner) / ".runner").exists()
+
+
 def test_tokens_are_not_in_the_environment_of_the_runner(fake_runner, monkeypatch):
     # Runner.Worker gives its environment to every job step: a token there is readable by any
     # workflow, and a registration token lets a workflow register another runner.

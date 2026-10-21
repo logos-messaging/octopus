@@ -13,6 +13,7 @@ import re
 import shutil
 import socket
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -105,6 +106,22 @@ def prepare(
     directory = runner_dir(data_dir, target)
     if directory.is_dir():
         return directory
+    try:
+        cache = ensure_installed(asset or asset_for(platform_key()), data_dir, client=client)
+    except (RunnerDownloadError, UnsupportedPlatformError) as e:
+        raise ManualRunnerError(f"could not prepare runner: {e}") from e
+    directory.parent.mkdir(parents=True, exist_ok=True)
+    # Copy beside the final place and rename at the end, so a Ctrl-C or a full disk never
+    # leaves a half tree that the next run would take for a good one.
+    work = Path(tempfile.mkdtemp(prefix=".prepare-", dir=directory.parent))
+    try:
+        make_job_dir(cache, work / "tree")
+        (work / "tree").rename(directory)
+    except OSError as e:
+        raise ManualRunnerError(f"could not copy runner: {directory}: {e}") from e
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    return directory
     try:
         cache = ensure_installed(asset or asset_for(platform_key()), data_dir, client=client)
     except (RunnerDownloadError, UnsupportedPlatformError) as e:
