@@ -204,17 +204,20 @@ def _manual_register(base: Path, target) -> tuple[Check, Path | None]:
         if manual.is_configured(directory):
             return Check("registration", Status.OK, f"already registered: {target.url}"), directory
         raw = _ask("Extra labels, comma separated (empty: only octopus)")
-        labels = [*manual.DEFAULT_LABELS, *[x.strip() for x in raw.split(",") if x.strip()]]
         name = _ask("Runner name in GitHub", manual.default_name())
+        unique = manual.unique_label(name)
+        extra = [x.strip() for x in raw.split(",") if x.strip()]
+        labels = [*manual.DEFAULT_LABELS, unique, *extra]
         token = ask_token("registration", target.new_runner_page, manual.TOKEN_ENV)
         manual.configure(directory, target, token, name=name, labels=labels)
+        manual.save_label(directory, unique)
     except manual.ManualRunnerError as e:
         return Check("registration", Status.FAIL, str(e)), None
     detail = f"{name} for {target.url} (labels: self-hosted, {', '.join(labels)})"
     return Check("registration", Status.CHANGED, detail), directory
 
 
-def init_manual_runner(data_dir: Path | None) -> list[Check]:
+def init_manual_runner(data_dir: Path | None, announce: bool = False) -> list[Check]:
     """Register this machine as a plain GitHub runner with a one-hour token, then run it."""
     from .agent import manual
     from .cli_manual import data_dir_or_default
@@ -238,12 +241,31 @@ def init_manual_runner(data_dir: Path | None) -> list[Check]:
         typer.echo(f"      octopus runner unregister-manual {target.name} removes it")
         return checks
     try:
-        code = manual.start(directory)
+        code = _manual_run(directory, base, announce)
     except manual.ManualRunnerError as e:
         return [*checks, _show(Check("runner", Status.FAIL, str(e)))]
     status = Status.OK if code == 0 else Status.FAIL
     checks.append(_show(Check("runner", status, f"exited with code: {code}")))
     return checks
+
+
+def _manual_run(directory: Path, base: Path, announce: bool) -> int:
+    """Run the runner; with `announce`, also publish its unique label for OIDC pick mode."""
+    from contextlib import ExitStack
+
+    from .agent import manual, manual_presence
+
+    label = manual.saved_label(directory)
+    if announce and label is None:
+        typer.echo("note: no unique label saved, register the runner again to announce it")
+    with ExitStack() as stack:
+        if announce and label is not None:
+            try:
+                runner_id = stack.enter_context(manual_presence.announce(label, base))
+                typer.echo(f"announcing label {label} as runner: {runner_id}")
+            except Exception as e:  # noqa: BLE001 - no node library or network: the runner works
+                typer.echo(f"note: could not announce the label: {e}", err=True)
+        return manual.start(directory)
 
 
 # --- coordinator ----------------------------------------------------------------------
@@ -403,6 +425,11 @@ DataDirOption = typer.Option(
     None, "--data-dir", help="Octopus data dir (default: OCTOPUS_DATA_DIR or the platform's)."
 )
 ApiUrlOption = typer.Option("https://api.github.com", "--api-url", help="GitHub API URL.")
+AnnounceOption = typer.Option(
+    False,
+    "--announce",
+    help="Manual role: also announce the runner's unique label to coordinators (OIDC pick mode).",
+)
 
 
 def add_init(app: typer.Typer) -> None:
@@ -413,6 +440,7 @@ def add_init(app: typer.Typer) -> None:
         env_file: Path = EnvFileOption,
         data_dir: Path | None = DataDirOption,
         api_url: str = ApiUrlOption,
+        announce: bool = AnnounceOption,
     ) -> None:
         """Set up this host as a runner or a coordinator, step by step. Safe to run again."""
         while role not in ROLES:
@@ -422,7 +450,7 @@ def add_init(app: typer.Typer) -> None:
         if role == "runner":
             checks = init_runner(config)
         elif role == "manual":
-            checks = init_manual_runner(data_dir)
+            checks = init_manual_runner(data_dir, announce)
         else:
             checks = init_coordinator(env_file, data_dir, api_url)
         if any(c.failed for c in checks):

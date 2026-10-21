@@ -99,7 +99,7 @@ def test_registers_with_a_hidden_token_and_runs(fake_runner):
     tree = runner_tree(fake_runner)
     args = (tree / "config.args").read_text().split()
     assert args[:3] == ["--unattended", "--url", "https://github.com/acme/app"]
-    assert args[args.index("--labels") + 1] == "octopus"
+    assert args[args.index("--labels") + 1] == f"octopus,{manual.unique_label(manual.default_name())}"
     assert "--replace" in args
     assert (tree / "run.marker").exists()
     assert "plain GitHub runner" in result.output
@@ -124,8 +124,9 @@ def test_extra_labels_and_name(fake_runner):
     result = init_manual(*fresh(labels="gpu, fast", name="lap"))
     assert result.exit_code == 0, result.output
     args = (runner_tree(fake_runner) / "config.args").read_text().split()
-    assert args[args.index("--labels") + 1] == "octopus,gpu,fast"
+    assert args[args.index("--labels") + 1] == "octopus,octopus-lap,gpu,fast"
     assert args[args.index("--name") + 1] == "lap"
+    assert manual.saved_label(runner_tree(fake_runner)) == "octopus-lap"
 
 
 def test_answering_no_registers_without_starting(fake_runner):
@@ -269,3 +270,24 @@ def test_unregister_when_nothing_is_registered(fake_runner):
 def test_unregister_bad_target(fake_runner):
     result = cli.invoke(app, ["runner", "unregister-manual", "a/b/c"])
     assert result.exit_code == 2
+
+
+def test_unique_label():
+    assert manual.unique_label("lap") == "octopus-lap"
+    assert manual.unique_label("octopus-manual-lap") == "octopus-manual-lap"
+
+
+def test_announce_publishes_the_unique_label_while_running(fake_runner, monkeypatch):
+    from octopus.agent import manual_presence
+    from octopus.proto import PRESENCE_TOPIC, Presence
+    from octopus.transport import MemoryBus, MemoryTransport
+
+    bus = MemoryBus()
+    seen = []
+    MemoryTransport(bus).subscribe(PRESENCE_TOPIC, lambda _t, p: seen.append(Presence.model_validate_json(p)))
+    monkeypatch.setattr(manual_presence, "default_transport_factory", lambda d: lambda: MemoryTransport(bus))
+    result = init_manual(*fresh(name="lap"), args=("--announce",))
+    assert result.exit_code == 0, result.output
+    assert "announcing label octopus-lap" in result.output
+    assert seen[0].labels == ["octopus-lap"] and not seen[0].offline
+    assert seen[-1].offline

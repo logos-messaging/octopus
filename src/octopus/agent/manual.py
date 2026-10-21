@@ -30,6 +30,8 @@ REMOVAL_TOKEN_ENV = "OCTOPUS_REMOVAL_TOKEN"
 _RUNNER_TOKEN_ENV = "ACTIONS_RUNNER_INPUT_TOKEN"
 _SECRET_ENV = (TOKEN_ENV, REMOVAL_TOKEN_ENV, _RUNNER_TOKEN_ENV)
 DEFAULT_LABELS = ("octopus",)
+LABEL_FILE = ".octopus-label"
+UNIQUE_LABEL_PREFIX = "octopus-"
 _PART = r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?"
 _TARGET = re.compile(rf"^(?P<owner>{_PART})(?:/(?P<repo>{_PART}))?$")
 _URL = re.compile(rf"^(?P<base>https://[^/\s]+)/(?P<owner>{_PART})(?:/(?P<repo>{_PART}))?/?$")
@@ -89,6 +91,22 @@ def is_configured(directory: Path) -> bool:
 
 def default_name() -> str:
     return f"octopus-manual-{socket.gethostname().split('.')[0]}"
+
+
+def unique_label(name: str) -> str:
+    """The label that only this runner has (`octopus-<name>`), used by OIDC pick mode."""
+    return name if name.startswith(UNIQUE_LABEL_PREFIX) else UNIQUE_LABEL_PREFIX + name
+
+
+def saved_label(directory: Path) -> str | None:
+    try:
+        return (directory / LABEL_FILE).read_text().strip() or None
+    except OSError:
+        return None
+
+
+def save_label(directory: Path, label: str) -> None:
+    (directory / LABEL_FILE).write_text(label + "\n")
 
 
 def prepare(
