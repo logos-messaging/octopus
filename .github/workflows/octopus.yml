@@ -1,0 +1,24 @@
+# Runs the pipeline in .octopus/ci.sh on team machines (Linux and macOS) over logos-delivery;
+# whatever no machine takes, and Windows, runs on GitHub-hosted runners. It runs next to ci.yml.
+# See docs/decentralized-ci.md. The reusable workflow is pinned to a commit on purpose: it runs
+# with id-token: write. Update the pin when the workflow changes.
+name: Octopus CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: octopus-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: logos-messaging/octopus/.github/workflows/octopus-ci.yml@6bd29e55dd8a9a412e41317d44bea09fc4a0d273
+    permissions:
+      id-token: write
+      contents: read
