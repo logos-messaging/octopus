@@ -65,13 +65,28 @@ jobs:
           make build-deps
           make DISABLE_RLN=true liblogosdelivery
 
+      # The build keeps its debug information: 279 MB on Linux, 68 MB without it. The exported
+      # symbols stay.
+      - name: Strip the debug information
+        run: |
+          lib="vendor/logos-delivery-python-bindings/vendor/logos-delivery/build/${{ matrix.built }}"
+          if [ "$RUNNER_OS" = "macOS" ]; then strip -S "$lib"; else strip --strip-debug "$lib"; fi
+          ls -l "$lib"
+
+      # `octopus lib install` takes the .gz when it is listed in SHA256SUMS. The plain asset stays
+      # for installs of older versions, which only know that name.
       - name: Name the asset
-        run: cp "vendor/logos-delivery-python-bindings/vendor/logos-delivery/build/${{ matrix.built }}" "${{ matrix.asset }}"
+        run: |
+          cp "vendor/logos-delivery-python-bindings/vendor/logos-delivery/build/${{ matrix.built }}" "${{ matrix.asset }}"
+          gzip -9 -c "${{ matrix.asset }}" > "${{ matrix.asset }}.gz"
+          ls -l "${{ matrix.asset }}" "${{ matrix.asset }}.gz"
 
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}
-          path: ${{ matrix.asset }}
+          path: |
+            ${{ matrix.asset }}
+            ${{ matrix.asset }}.gz
           if-no-files-found: error
 
   publish:

@@ -8,7 +8,8 @@ set -eu
 
 REPO="https://github.com/logos-messaging/octopus"
 REF="${OCTOPUS_REF:-main}"
-SPEC="octopus[logos] @ git+${REPO}@${REF}"
+# An archive, not git+: pip would clone every submodule, recursively, twice under pipx.
+SPEC="octopus[logos] @ ${REPO}/archive/${REF}.tar.gz"
 
 die() { echo "error: $*" >&2; exit 1; }
 

@@ -81,7 +81,7 @@ jobs:
           INPUT_TEAM_KEY: ${{ inputs.team-key }}
         run: |
           test -n "$OCTOPUS_REF"
-          pip install "octopus[logos] @ git+https://github.com/logos-messaging/octopus@${OCTOPUS_REF}"
+          pip install "octopus[logos] @ https://github.com/logos-messaging/octopus/archive/${OCTOPUS_REF}.tar.gz"
           octopus lib install
           team_key="${INPUT_TEAM_KEY:-$(cat .octopus/team.pub)}"
           args=()

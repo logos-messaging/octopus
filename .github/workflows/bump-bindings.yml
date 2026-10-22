@@ -25,8 +25,8 @@ jobs:
       - name: Move the pyproject pin to the same commit
         run: |
           sha=$(git rev-parse HEAD:vendor/logos-delivery-python-bindings)
-          sed -i -E "s#(logos-delivery-python-bindings@)[0-9a-f]{40}#\1${sha}#" pyproject.toml
-          grep -n "logos-delivery-python-bindings@" pyproject.toml
+          sed -i -E "s#(logos-delivery-python-bindings/archive/)[0-9a-f]{40}#\1${sha}#" pyproject.toml
+          grep -n "logos-delivery-python-bindings/archive/" pyproject.toml
 
       - uses: peter-evans/create-pull-request@v7
         with:

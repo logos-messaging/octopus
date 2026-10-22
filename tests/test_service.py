@@ -188,8 +188,15 @@ def test_systemd_escapes_dollar_and_percent():
 
 def test_install_script_puts_the_extra_before_the_url():
     script = (Path(__file__).parent.parent / "scripts" / "install.sh").read_text()
-    assert 'SPEC="octopus[logos] @ git+' in script
+    assert 'SPEC="octopus[logos] @ ${REPO}/archive/${REF}.tar.gz"' in script
     assert "$SPEC[logos]" not in script
+
+
+def test_installs_use_archives_not_git_urls():
+    """A git+ URL makes pip clone every submodule, recursively (issue #95)."""
+    root = Path(__file__).parent.parent
+    for name in ("scripts/install.sh", "scripts/install.ps1", "pyproject.toml"):
+        assert "git+https" not in (root / name).read_text(), name
 
 
 def test_install_script_names_all_three_ways_and_the_path_hint():
