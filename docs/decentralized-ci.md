@@ -122,16 +122,43 @@ used: lists are re-published every 5 minutes and on request.
 
 ## Security notes
 
-- **A job can read your GitHub login and use your SSH agent.** A job runs `.octopus/ci.sh` on the
-  machine as its owner, in a fresh directory but with no sandbox. Whoever can push a branch to an
-  allowed repo can make it run `gh auth token` or `git credential fill` (the token is in the `gh`
-  config or the keychain, not only in the environment), read `~/.ssh`, and reach anything else
-  the owner's user can. Octopus removes `GITHUB_TOKEN`, `GH_TOKEN`, `SSH_AUTH_SOCK` and the team
-  passphrase from the job environment, which hides them from a careless script and no more.
-  `octopus ci init` prints this and asks the owner to confirm (`--yes` skips the question, not the
-  notice). Only serve repos whose writers you would trust with your account. Running jobs as a
-  separate OS user or in a container, with the commit statuses posted by the node outside of it,
-  is the real fix and is not built yet.
+- **By default a job can read your GitHub login and use your SSH agent.** A job runs
+  `.octopus/ci.sh` on the machine as its owner, in a fresh directory but with no sandbox. Whoever
+  can push a branch to an allowed repo can make it run `gh auth token` or `git credential fill`
+  (the token is in the `gh` config or the keychain, not only in the environment), read `~/.ssh`,
+  and reach anything else the owner's user can. Octopus removes `GITHUB_TOKEN`, `GH_TOKEN`,
+  `SSH_AUTH_SOCK` and the team passphrase from the job environment, which hides them from a
+  careless script and no more. `octopus ci init` prints this and asks the owner to confirm
+  (`--yes` skips the question, not the notice). Only serve repos whose writers you would trust
+  with your account, or turn on the container sandbox below (Linux hosts).
+
+## Sandbox: jobs in a container (Linux hosts)
+
+```bash
+octopus ci sandbox enable --image <image>      # then restart the node (install-service)
+octopus ci sandbox status | disable
+```
+
+The node stays trusted: it clones the commit with the owner's git credentials and posts the
+commit status. The script runs in a throwaway container (`docker` or `podman`, `--runtime`) that
+sees **only the checkout**, mounted at `/work`:
+
+- no `gh` config, SSH keys or agent, home directory or keychain of the owner; `HOME` is a
+  temporary directory;
+- an environment of only `CI` and `OCTOPUS_*` (not the node's), read-only root filesystem,
+  all capabilities dropped, `no-new-privileges`, limits on memory (`--memory`, default 4g), CPUs
+  (`--cpus`, 2) and processes (1024), and `--network` (default `bridge`; `none` cuts the job off);
+- run as the owner's uid inside the container, removed afterwards (`--rm`, and `rm -f` if the node
+  stops it).
+
+**The image is your choice, never the repo's:** it needs the toolchain the job uses (for Octopus's
+own `.octopus/ci.sh`, Python and `make`). Nothing is cached between jobs. A job with the network on
+can still send the checkout out of the machine, but the checkout holds no credentials.
+
+Limits: Linux hosts only. A `macos` leg needs a macOS VM (for example Tart), which is not built:
+`enable` refuses on macOS, and a node with a sandbox configured on another OS fails the leg with
+exit code 126 rather than running it unprotected. This is container isolation (shared kernel), not
+a VM. Not yet verified against a real Docker or Podman, only against a fake runtime in the tests.
 - Membership: team key -> signed member list (or a delegation, 30 days, scoped to one org/repo) ->
   GitHub login -> SSH signature of the node's keys (checked against `github.com/<login>.keys`) ->
   node. Removing someone takes effect at the next sync (a list lives 3 days at most).

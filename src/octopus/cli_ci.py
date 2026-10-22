@@ -373,6 +373,79 @@ def team_show(data_dir: Path | None = DataDirOpt) -> None:
         typer.echo(f"{ml.scope} (version {ml.version}): {', '.join(ml.logins)}")
 
 
+sandbox_app = typer.Typer(
+    no_args_is_help=True, help="Run jobs in a throwaway container, not as you (Linux hosts)."
+)
+ci_app.add_typer(sandbox_app, name="sandbox")
+
+
+@sandbox_app.command("enable")
+def sandbox_enable(
+    image: str = typer.Option(
+        ..., "--image", help="Container image with the toolchain your jobs need (your choice)."
+    ),
+    runtime: str = typer.Option("docker", "--runtime", help="docker or podman."),
+    network: str = typer.Option("bridge", "--network", help="Container network; none cuts it off."),
+    memory: str = typer.Option("4g", "--memory", help="Memory limit, e.g. 4g."),
+    cpus: str = typer.Option("2", "--cpus", help="CPU limit, e.g. 2."),
+    pull: bool = typer.Option(True, "--pull/--no-pull", help="Pull the image now."),
+    data_dir: Path | None = DataDirOpt,
+) -> None:
+    """Run every job in a container that sees only its checkout. Restart the node afterwards."""
+    import shutil
+    import subprocess
+
+    from .ci.sandbox import Sandbox, SandboxError
+
+    why = Sandbox.supported()
+    if why is not None:
+        raise _fail(why, 3)
+    try:
+        sandbox = Sandbox(image=image, runtime=runtime, network=network, memory=memory, cpus=cpus)
+    except SandboxError as e:
+        raise _fail(str(e), 2) from e
+    if shutil.which(sandbox.runtime) is None:
+        raise _fail(f"{sandbox.runtime} is not installed or not on the PATH", 3)
+    if pull:
+        typer.echo(f"pulling {sandbox.image} ...")
+        try:
+            done = subprocess.run(sandbox.pull_argv(), check=False, timeout=1800)
+        except (OSError, subprocess.SubprocessError) as e:
+            raise _fail(f"could not pull the image: {e}", 4) from e
+        if done.returncode != 0:
+            raise _fail(f"could not pull the image: exit code: {done.returncode}", 4)
+    _home(data_dir).save_sandbox(sandbox)
+    typer.echo(f"jobs now run in {sandbox.image} ({sandbox.runtime}, network {sandbox.network})")
+    typer.echo("restart the node for it to take effect: octopus runner install-service")
+
+
+@sandbox_app.command("disable")
+def sandbox_disable(data_dir: Path | None = DataDirOpt) -> None:
+    """Run jobs as you again (no sandbox)."""
+    if _home(data_dir).clear_sandbox():
+        typer.echo("sandbox off: jobs run as you after the node restarts")
+    else:
+        typer.echo("sandbox was already off")
+
+
+@sandbox_app.command("status")
+def sandbox_status(data_dir: Path | None = DataDirOpt) -> None:
+    """Show how jobs are run on this machine."""
+    from .ci.sandbox import SandboxError
+
+    try:
+        sandbox = _home(data_dir).sandbox()
+    except SandboxError as e:
+        raise _fail(str(e), 3) from e
+    if sandbox is None:
+        typer.echo("no sandbox: jobs run as you (see: octopus ci sandbox enable --image <image>)")
+        return
+    typer.echo(
+        f"sandbox: {sandbox.image} via {sandbox.runtime}, network {sandbox.network}, "
+        f"memory {sandbox.memory}, cpus {sandbox.cpus}"
+    )
+
+
 def add_ci(app: typer.Typer) -> None:
     app.add_typer(ci_app, name="ci")
     app.add_typer(team_app, name="team")

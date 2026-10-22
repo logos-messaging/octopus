@@ -217,8 +217,8 @@ JOB_ACCESS_NOTICE = (
     "A CI job runs on this machine as you, in a fresh directory but not in a sandbox.\n"
     "A job from any branch of {name} can read your GitHub login (the gh token or the keychain),\n"
     "your SSH keys and agent, and everything else your user can read. Only serve repos whose\n"
-    "writers you would trust with your account. Running jobs as a separate OS user or in a\n"
-    "container is not built yet."
+    "writers you would trust with your account. On Linux, run jobs in a container instead:\n"
+    "octopus ci sandbox enable --image <image>. A macOS VM sandbox is not built yet."
 )
 
 

@@ -18,6 +18,7 @@ from .exec import GhRunProbe, GhStatusPoster, GitExecutor
 from .gh import Gh
 from .home import Home
 from .messages import CI_TOPIC, ListMsg, ListRequest
+from .sandbox import SandboxError
 
 log = logging.getLogger(__name__)
 
@@ -72,6 +73,10 @@ class CiRuntime:
         for ml in home.lists():
             self.team.accept_list(ml)
         allow = home.allow()
+        try:
+            sandbox = home.sandbox() if executor is None else None
+        except SandboxError as e:
+            raise RuntimeError_(f"{e}: run: octopus ci sandbox enable or disable") from e
         self.node = CiNode(
             transport=transport,
             team=self.team,
@@ -79,7 +84,7 @@ class CiRuntime:
             enc_key=enc_key,
             sign_key=sign_key,
             verifier=verifier or OidcVerifier("octopus-ci"),
-            executor=executor or GitExecutor(home.work_dir),
+            executor=executor or GitExecutor(home.work_dir, sandbox=sandbox),
             status=status or GhStatusPoster(),
             probe=probe or GhRunProbe(),
             config=CiConfig(
