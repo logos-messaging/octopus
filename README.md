@@ -24,7 +24,7 @@ three ways to use it, from the lightest to the heaviest.
 not org members (or, for a repo set up with a token, cannot push to it). It is not a
 public runner pool.
 
-> Status: early (`v0.3.0`). It has run against real GitHub repos, but the nightly end-to-end test
+> Status: early (`v0.3.1`). It has run against real GitHub repos, but the nightly end-to-end test
 > is not on yet (#86) and several rough edges are open. See the open issues for the plan.
 > Read the [threat model](docs/threat-model.md) before lending a machine.
 
