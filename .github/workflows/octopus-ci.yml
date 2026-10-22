@@ -57,8 +57,10 @@ jobs:
           import base64, json, sys
           payload = json.load(sys.stdin)["value"].split(".")[1]
           claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
-          print(claims.get("job_workflow_sha") or claims["job_workflow_ref"].split("@")[1])
+          print(claims["job_workflow_sha"])
           ')
+          # A commit, never a ref that can move.
+          echo "$sha" | grep -Eq '^[0-9a-f]{40}$'
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
       - id: submit
         # Any failure here (no library, no network, no fleet) must end in the fallback.

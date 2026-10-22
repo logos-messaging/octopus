@@ -21,6 +21,7 @@ LIST_TTL_S = 3 * 24 * 3600.0
 DELEGATION_TTL_S = 30 * 24 * 3600.0
 PROOF_TTL_S = 30 * 24 * 3600.0
 KEYS_CACHE_S = 3600.0
+KEYS_RETRY_S = 60.0
 MAX_CLOCK_SKEW_S = 300.0
 
 GithubKeys = Callable[[str], list[bytes]]
@@ -93,11 +94,31 @@ def verify_member_list(ml: MemberList, team_pub: Ed25519PublicKey, now: float) -
 
 
 def fetch_github_keys(login: str) -> list[bytes]:
-    """The Ed25519 keys GitHub publishes for a user (public, no token)."""
+    """The Ed25519 keys GitHub publishes for a user (public, no token).
+
+    A user that does not exist has no keys (404). Any other failure (429, 5xx) raises, so the
+    caller keeps the keys it already has instead of taking an outage for "no keys".
+    """
     resp = httpx.get(f"https://github.com/{login}.keys", timeout=10, follow_redirects=True)
-    if resp.status_code != 200:
+    if resp.status_code == 404:
         return []
+    resp.raise_for_status()
     return parse_authorized_keys(resp.text)
+
+
+def scope_covers(scope: str, repo: str) -> bool:
+    """Whether a member list of `scope` ("org:<name>" or "repo:<owner/name>") speaks for `repo`.
+
+    A list only counts for the repos inside its scope: a login on the list of one org is not a
+    member for the legs of another org, whoever signed the list.
+    """
+    kind, _, name = scope.partition(":")
+    wanted = repo.casefold()
+    if kind == "org":
+        return wanted.split("/", 1)[0] == name.casefold()
+    if kind == "repo":
+        return wanted == name.casefold()
+    return False
 
 
 def make_node_proof(
@@ -163,14 +184,21 @@ class TeamState:
         with self._lock:
             return [ml for ml in self._lists.values() if ml.not_after > now]
 
-    def is_member_login(self, login: str) -> bool:
+    def is_member_login(self, login: str, repo: str | None = None) -> bool:
+        """Whether `login` is listed. With `repo`, only the lists whose scope covers it count."""
         who = login.strip().lower()
-        return any(who in ml.logins for ml in self.current())
+        return any(
+            who in ml.logins and (repo is None or scope_covers(ml.scope, repo))
+            for ml in self.current()
+        )
 
-    def check_proof(self, proof: NodeProof) -> bool:
-        """Whether `proof` shows a node of a listed login. Never raises."""
+    def check_proof(self, proof: NodeProof, repo: str | None = None) -> bool:
+        """Whether `proof` shows a node of a listed login (of a list covering `repo`, if given).
+
+        Never raises.
+        """
         now = self._now()
-        if proof.not_after <= now or not self.is_member_login(proof.login):
+        if proof.not_after <= now or not self.is_member_login(proof.login, repo):
             return False
         with self._lock:
             if self._proofs.get(proof.ssh_sig, 0.0) > now:
@@ -199,7 +227,13 @@ class TeamState:
             keys = self._github_keys(login)
         except (httpx.HTTPError, ValueError) as e:
             log.warning("could not fetch the SSH keys of a team member: %s", e)
-            keys = cached[1] if cached is not None else []
+            # Keep the keys held (even stale ones) and try again soon; never cache "no keys"
+            # after an error, or one 429 would lock a member out for an hour.
+            if cached is not None:
+                with self._lock:
+                    self._keys[login] = (now + KEYS_RETRY_S, cached[1])
+                return cached[1]
+            return []
         with self._lock:
             self._keys[login] = (now + KEYS_CACHE_S, keys)
         return keys

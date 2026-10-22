@@ -89,11 +89,11 @@ def machine(tmp_path, monkeypatch):
     return tmp_path, key_file, gh, ssh
 
 
-def run_init(tmp_path, key_file, *args, answers=""):
+def run_init(tmp_path, key_file, *args, answers="", yes=True):
     return cli.invoke(
         app,
         ["ci", "init", "acme/app", "--ssh-key", str(key_file), "--no-service",
-         "--data-dir", str(tmp_path / "data"), *args],
+         "--data-dir", str(tmp_path / "data"), *(["--yes"] if yes else []), *args],
         input=answers,
     )
 
@@ -218,13 +218,32 @@ def test_the_service_is_installed_unless_declined(machine, monkeypatch):
     )
     result = cli.invoke(
         app,
-        ["ci", "init", "acme/app", "--ssh-key", str(key_file),
+        ["ci", "init", "acme/app", "--ssh-key", str(key_file), "--yes",
          "--data-dir", str(tmp_path / "data")],
         input="y\ny\n",
     )
     assert result.exit_code == 0, result.output
     (spec,) = installed
     assert list(spec.argv[-3:]) == ["octopus", "ci", "node"] and spec.name == "ci"
+
+
+def test_the_owner_must_agree_that_a_job_can_read_their_login(machine):
+    tmp_path, key_file, *_ = machine
+    declined = run_init(tmp_path, key_file, answers="y\ny\nn\n", yes=False)
+    assert declined.exit_code == 1
+    assert "can read your GitHub login" in declined.output and "SSH keys and agent" in declined.output
+    home = Home(tmp_path / "data" / "ci")
+    assert home.allow().repos == []  # the repo was not allowed
+    accepted = run_init(tmp_path, key_file, answers="y\n", yes=False)
+    assert accepted.exit_code == 0, accepted.output
+    assert home.allow().repos == ["acme/app"]
+
+
+def test_yes_skips_the_question_but_not_the_notice(machine):
+    tmp_path, key_file, *_ = machine
+    result = run_init(tmp_path, key_file, answers="y\ny\n")
+    assert result.exit_code == 0, result.output
+    assert "can read your GitHub login" in result.output and "acknowledged with --yes" in result.output
 
 
 def test_only_linux_and_macos(machine, monkeypatch):

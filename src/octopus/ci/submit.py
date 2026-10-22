@@ -36,6 +36,7 @@ class Leg:
     leg_id: str
     token: str
     reply_key: X25519PrivateKey
+    repo: str
 
 
 @dataclass
@@ -54,7 +55,7 @@ class Submitter:
         wait_s: float = 45.0,
         list_wait_s: float = 10.0,
         repeat_s: float = 3.0,
-        discover_s: float = 12.0,
+        discover_s: float = 25.0,
         sleep: Callable[[float], None] = time.sleep,
         monotonic: Callable[[], float] = time.monotonic,
         pump: Callable[[], None] | None = None,
@@ -64,9 +65,10 @@ class Submitter:
         self._wait_s = wait_s
         self._list_wait_s = list_wait_s
         self._repeat_s = repeat_s
-        # Nodes announce every 10 s: after this long, an OS with no idle node online is given up.
+        # Nodes announce every 10 s: after two announce intervals and a margin, an OS with no
+        # idle node online is given up (one lost announce must not make a leg run twice).
         self._discover_s = discover_s
-        self._idle_os: set[str] = set()
+        self._idle: list[tuple[str, str]] = []  # (os, login) of the idle nodes heard
         self._given_up: set[str] = set()
         self._sleep = sleep
         self._mono = monotonic
@@ -78,7 +80,7 @@ class Submitter:
         """Ask the fleet for every leg; the legs nobody takes in time come back as unhandled."""
         self._legs = {leg.leg_id: leg for leg in legs}
         self._result = SubmitResult()
-        self._idle_os, self._given_up = set(), set()
+        self._idle, self._given_up = [], set()
         self._transport.subscribe(CI_TOPIC, self._on_message)
         try:
             if self._wait_for_team():
@@ -109,7 +111,7 @@ class Submitter:
         while self._waiting(legs) and self._mono() - start < self._wait_s:
             if self._mono() - start >= self._discover_s:
                 for leg in legs:
-                    if leg.os not in self._idle_os and leg.os not in self._result.handled:
+                    if not self._has_idle_node(leg) and leg.os not in self._result.handled:
                         self._given_up.add(leg.os)
             if self._mono() - last >= self._repeat_s:
                 last = self._mono()
@@ -119,6 +121,12 @@ class Submitter:
                         self._transport.publish(CI_TOPIC, payload.encode())
             self._pump()
             self._sleep(0.2)
+
+    def _has_idle_node(self, leg: Leg) -> bool:
+        return any(
+            os_name == leg.os and self._team.is_member_login(login, leg.repo)
+            for os_name, login in self._idle
+        )
 
     def _waiting(self, legs: list[Leg]) -> list[Leg]:
         return [
@@ -142,12 +150,13 @@ class Submitter:
             return
         if msg.kind == "announce":
             if msg.busy < msg.capacity and valid_node_message(msg, self._team):
-                self._idle_os.add(msg.os)
+                self._idle.append((msg.os, msg.proof.login))
+                del self._idle[:-1000]
             return
         leg = self._legs.get(msg.leg_id)
         if leg is None or leg.os in self._result.handled:
             return
-        if valid_node_message(msg, self._team):
+        if valid_node_message(msg, self._team, leg.repo):
             self._result.handled[leg.os] = msg.node_id
             self._result.enc_pubs[leg.os] = msg.proof.enc_pub
 

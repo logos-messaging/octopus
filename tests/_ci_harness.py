@@ -93,7 +93,8 @@ class Machine:
             lambda msg: build_sshsig(self.ssh, NODE_PROOF_NAMESPACE, msg),
         )
         self.team = TeamState(world.team_key.public_key(), world.keys_for, world.clock.now)
-        self.team.accept_list(world.member_list)
+        for ml in world.member_lists:
+            self.team.accept_list(ml)
         self.node = CiNode(
             transport=self.transport,
             team=self.team,
@@ -130,6 +131,7 @@ class World:
         self.member_list = make_member_list(
             self.team_key, "org:acme", 1, list(logins), self.clock.now()
         )
+        self.member_lists = [self.member_list]  # more lists (other scopes) may be added
         self.machines: list[Machine] = []
 
     def keys_for(self, login: str) -> list[bytes]:

@@ -79,12 +79,27 @@ used: lists are re-published every 5 minutes and on request.
 
 ## Security notes
 
-- Trust boundary is the same as GitHub's: whoever can push to an allowed repo can run code on a
-  team machine, as the machine's owner. A job is not sandboxed: it runs in a fresh directory as
-  the owner. Do not put release or deploy secrets there.
+- **A job can read your GitHub login and use your SSH agent.** A job runs `.octopus/ci.sh` on the
+  machine as its owner, in a fresh directory but with no sandbox. Whoever can push a branch to an
+  allowed repo can make it run `gh auth token` or `git credential fill` (the token is in the `gh`
+  config or the keychain, not only in the environment), read `~/.ssh`, and reach anything else
+  the owner's user can. Octopus removes `GITHUB_TOKEN`, `GH_TOKEN`, `SSH_AUTH_SOCK` and the team
+  passphrase from the job environment, which hides them from a careless script and no more.
+  `octopus ci init` prints this and asks the owner to confirm (`--yes` skips the question, not the
+  notice). Only serve repos whose writers you would trust with your account. Running jobs as a
+  separate OS user or in a container, with the commit statuses posted by the node outside of it,
+  is the real fix and is not built yet.
 - Membership: team key -> signed member list (or a delegation, 30 days, scoped to one org/repo) ->
   GitHub login -> SSH signature of the node's keys (checked against `github.com/<login>.keys`) ->
   node. Removing someone takes effect at the next sync (a list lives 3 days at most).
+- **A list only speaks for its scope.** A login on the list of `org:a` is a member for the legs of
+  repos of `a`, not for other orgs: nodes and the submitter check the login against the lists
+  that cover the repo of the leg. So a leaked delegated key (one scope, 30 days) can add logins
+  only to its own scope, and cannot claim or fake leases for legs elsewhere.
+- Lists hold logins, not numeric user ids: a login that is renamed or deleted can be taken by
+  another person, who could then prove it with their own SSH key. Known limitation.
+- If `github.com/<login>.keys` fails (429, 5xx), the keys already held keep being used and a retry
+  follows in a minute; an outage is never taken for "no keys". A missing user (404) has none.
 - The team key is encrypted at rest and loaded only by `team init`/`team sync`/`ci init`; the
   service holds only the delegated key (it can sign member lists of one scope for 30 days).
 - A rogue member node could post a false success. Anyone with write access can already set a
@@ -126,7 +141,8 @@ commit, ran `.octopus/ci.sh`, and posted `octopus/ci (macos)` pending, then succ
 owner. (`github.job_workflow_sha` is empty in a reusable workflow, so the job reads
 `job_workflow_sha` from its own OIDC token.) There is no Linux node, so that leg fell back to a hosted runner, and Windows ran hosted.
 The submit job took about 2 minutes, most of it waiting for the Linux leg: the submitter now gives
-up on an OS with no idle node online after about 12 s.
+up on an OS with no idle node online after about 25 s (two announce intervals and a margin, so
+one lost announce does not make a leg run twice).
 
 ## Not verified
 

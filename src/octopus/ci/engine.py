@@ -350,7 +350,7 @@ class CiNode:
                 continue
             if now - peer.seen > self._cfg.offline_s or m.os != info.os:
                 continue
-            if m.busy >= m.capacity or not self._team.is_member_login(m.proof.login):
+            if m.busy >= m.capacity or not self._team.is_member_login(m.proof.login, info.repo):
                 continue
             ids.append(nid)
         if self._cfg.os_name == info.os and self._busy() < self._cfg.capacity:
@@ -368,6 +368,9 @@ class CiNode:
     def _apply(self, leg: _Leg, msg: NodeMessage, now: float) -> None:
         """A claim, lease or done about this leg from another node."""
         if msg.node_id == self.node_id:
+            return
+        # The message was checked as coming from some member; it must be one for this repo.
+        if not self._team.is_member_login(msg.proof.login, leg.info.repo):
             return
         if msg.kind == "done":
             leg.state = "closed" if leg.state != "running" else leg.state
@@ -559,8 +562,12 @@ class CiNode:
                 log.warning("could not publish a CI message", exc_info=True)
 
 
-def valid_node_message(msg: NodeMessage, team: TeamState) -> bool:
-    """Signed by a node whose keys a listed GitHub user vouched for."""
+def valid_node_message(msg: NodeMessage, team: TeamState, repo: str | None = None) -> bool:
+    """Signed by a node whose keys a listed GitHub user vouched for.
+
+    With `repo`, the user must be on a list whose scope covers that repo: a login that a
+    delegated key put on the list of another org does not count here.
+    """
     proof = msg.proof
     if proof.node_id != msg.node_id:
         return False
@@ -570,7 +577,7 @@ def valid_node_message(msg: NodeMessage, team: TeamState) -> bool:
         return False
     if not verify(sign_pub, msg.signing_bytes(), msg.sig):
         return False
-    return team.check_proof(proof)
+    return team.check_proof(proof, repo)
 
 
 def own_node_id(enc_key: X25519PrivateKey) -> str:

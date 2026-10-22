@@ -32,7 +32,7 @@ def legs_for(world, *oses):
     for os_name in oses:
         leg_id, payload, reply = world.request(os_name)
         token = json.loads(payload)["token"]
-        out.append(Leg(os=os_name, leg_id=leg_id, token=token, reply_key=reply))
+        out.append(Leg(os=os_name, leg_id=leg_id, token=token, reply_key=reply, repo=REPO))
     return out
 
 
@@ -175,6 +175,22 @@ def test_git_executor_stops_a_running_script(tmp_path):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="CI nodes run on Linux and macOS only")
+@pytest.mark.skipif(sys.platform == "win32", reason="CI nodes run on Linux and macOS only")
+def test_job_environment_has_no_ssh_agent(repo, tmp_path, monkeypatch):
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/agent.sock")
+    src, _ = repo
+    (src / ".octopus" / "ci.sh").write_text('echo "agent=${SSH_AUTH_SOCK:-none}"\n')
+    run(["git", "commit", "-qam", "env"], src)
+    sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=src, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    lines = []
+    GitExecutor(tmp_path / "w", url="file://{repo}", poll_s=0.01).run(
+        leg_info(str(src), sha), lines.append, lambda: False
+    )
+    assert "agent=none" in lines
+
+
 def test_job_environment_has_no_github_token(repo, tmp_path, monkeypatch):
     monkeypatch.setenv("GH_TOKEN", "SECRET-TOKEN")
     src, sha = repo
@@ -217,7 +233,7 @@ def test_an_os_with_no_idle_node_is_given_up_early_not_after_the_full_wait(world
     started = world.clock.t
     result = sub.submit(legs_for(world, "linux", "macos"))
     assert result.handled.keys() == {"macos"} and result.unhandled == ["linux"]
-    assert world.clock.t - started < 25  # not the full 45 s
+    assert 25 <= world.clock.t - started < 40  # after two announce intervals, not the full 45 s
 
 
 def test_a_busy_node_does_not_keep_the_submitter_waiting(world):
@@ -231,4 +247,4 @@ def test_a_busy_node_does_not_keep_the_submitter_waiting(world):
     sub, _ = make_submitter(world, wait_s=45)
     started = world.clock.t
     result = sub.submit(legs_for(world, "linux"))
-    assert result.unhandled == ["linux"] and world.clock.t - started < 25
+    assert result.unhandled == ["linux"] and world.clock.t - started < 40

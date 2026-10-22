@@ -23,6 +23,9 @@ SshKeyOpt = typer.Option(
 )
 LoginOpt = typer.Option(None, "--login", help="Your GitHub login (default: gh's).")
 NoServiceOpt = typer.Option(False, "--no-service", help="Do not install the service.")
+YesOpt = typer.Option(
+    False, "--yes", help="Do not ask to confirm that jobs run as you (the notice is still shown)."
+)
 OsOpt = typer.Option(..., "--os", help="An OS to ask for (repeatable).")
 TeamKeyOpt = typer.Option(
     "", "--team-key", envvar="OCTOPUS_TEAM_KEY", help="The team's public key."
@@ -61,6 +64,7 @@ def ci_init(
     ssh_key: Path | None = SshKeyOpt,
     login: str | None = LoginOpt,
     no_service: bool = NoServiceOpt,
+    yes: bool = YesOpt,
     data_dir: Path | None = DataDirOpt,
 ) -> None:
     """Join the team as a member, or as its admin: Octopus finds out which you are."""
@@ -79,6 +83,7 @@ def ci_init(
         data_dir=base,
         show=_show,
         start_service=not no_service,
+        assume_yes=yes,
     )
     if any(c.failed for c in checks):
         raise typer.Exit(code=1)
@@ -190,7 +195,7 @@ def ci_submit(
             _write_outputs([], list(oses))
             return
         legs.append(
-            Leg(os_name, make_leg_id(repo, run_id, attempt, os_name), token, reply)
+            Leg(os_name, make_leg_id(repo, run_id, attempt, os_name), token, reply, repo)
         )
     try:
         transport = LogosTransport(
