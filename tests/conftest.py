@@ -1,4 +1,5 @@
 import json
+import socket
 from pathlib import Path
 
 import pytest
@@ -68,3 +69,34 @@ def rsa_key_pem() -> bytes:
         serialization.PrivateFormat.PKCS8,
         serialization.NoEncryption(),
     )
+
+
+_PORTS_GIVEN: set[int] = set()
+
+
+def node_ports() -> dict:
+    """Free `tcp-port`, `discv5-udp-port` and `quic-port` overrides for one local node.
+
+    The ports are probed on the wildcard address, which the node binds, and the probe sockets
+    stay open until all three are chosen, so two of them can never be the same UDP port. A port
+    is never given out twice in one test run. Probing on 127.0.0.1 alone, one port at a time,
+    gave the QUIC port "Address already in use" on macOS (#100).
+    """
+    socks = []
+    try:
+        ports = []
+        for kind in (socket.SOCK_STREAM, socket.SOCK_DGRAM, socket.SOCK_DGRAM):
+            while True:
+                s = socket.socket(socket.AF_INET, kind)
+                socks.append(s)
+                s.bind(("0.0.0.0", 0))
+                port = s.getsockname()[1]
+                if port not in _PORTS_GIVEN and port not in ports:
+                    break
+            ports.append(port)
+    finally:
+        for s in socks:
+            s.close()
+    _PORTS_GIVEN.update(ports)
+    tcp, discv5, quic = ports
+    return {"tcp-port": tcp, "discv5-udp-port": discv5, "quic-port": quic}
