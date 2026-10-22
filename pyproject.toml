@@ -24,7 +24,7 @@ logos = [
   "result>=0.17.0",
   # Same commit as the vendor/logos-delivery-python-bindings submodule (a test keeps them equal).
   # An archive, not git+: pip would clone the submodules (logos-delivery and its own) recursively.
-  "logosdelivery @ https://github.com/logos-messaging/logos-delivery-python-bindings/archive/8068335cf885c00aae1c766be8b51d8d275d7d1d.tar.gz",
+  "logosdelivery @ https://github.com/logos-messaging/logos-delivery-python-bindings/archive/4a8e63bb174b85e75f2a0eb30a46649c33469be5.tar.gz",
 ]
 dev = ["pytest>=8.0", "ruff>=0.5"]
 
