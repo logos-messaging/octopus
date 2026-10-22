@@ -108,13 +108,18 @@ pytest
 Integration tests need the native library (see the bindings README for details):
 
 ```bash
-make -C vendor/logos-delivery-python-bindings/vendor/logos-delivery liblogosdelivery
+NIM_PARAMS=-d:chronicles_runtime_filtering=on \
+   make -C vendor/logos-delivery-python-bindings/vendor/logos-delivery liblogosdelivery
 cp vendor/logos-delivery-python-bindings/vendor/logos-delivery/build/liblogosdelivery.* \
    vendor/logos-delivery-python-bindings/lib/
 ln -sf liblogosdelivery.dylib vendor/logos-delivery-python-bindings/lib/liblogosdelivery.so  # macOS
 pip install -e '.[logos]'
 pytest -m needs_lib
 ```
+
+`NIM_PARAMS` lets the library filter its logs by `OCTOPUS_LOG_LEVEL` (default `INFO`); without it the
+library writes every TRACE and DEBUG line (#93). Pass it in the environment, not on the `make` command
+line, where it would replace the Makefile's own flags.
 
 The bindings load `lib/liblogosdelivery.so` from their own checkout. Octopus looks for them
 in `vendor/logos-delivery-python-bindings`; set `OCTOPUS_BINDINGS` to use another checkout.

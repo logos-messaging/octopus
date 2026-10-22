@@ -133,7 +133,11 @@ def ci_node(
         settings = RunnerConfig.load(settings_path())
     except ConfigError as e:
         raise _fail(str(e), 3) from e
-    transport = LogosTransport(settings.node_config(home.node_dir), fast_stop=True)
+    try:
+        node_config = settings.node_config(home.node_dir)
+    except ValueError as e:  # e.g. an invalid OCTOPUS_LOG_LEVEL
+        raise _fail(str(e), 3) from e
+    transport = LogosTransport(node_config, fast_stop=True)
     import platform
 
     try:
@@ -201,7 +205,7 @@ def ci_submit(
     from .ci.summary import render as render_summary
     from .crypto import decode_signing_public, encode_public_key, generate_private_key
     from .team import TeamState
-    from .transport.config import runner_config
+    from .transport.config import DEFAULT_LOG_LEVEL, env_log_level, runner_config
     from .transport.logos import LogosTransport
 
     env = os.environ
@@ -231,8 +235,13 @@ def ci_submit(
             Leg(os_name, make_leg_id(repo, run_id, attempt, os_name), token, reply, repo)
         )
     try:
+        level = env_log_level()
+    except ValueError as e:  # a bad setting must not send every leg to GitHub
+        typer.echo(f"warning: {e}; using {DEFAULT_LOG_LEVEL}", err=True)
+        level = DEFAULT_LOG_LEVEL
+    try:
         transport = LogosTransport(
-            {**runner_config(entry_nodes=entry_node), "mode": "Edge"}
+            {**runner_config(entry_nodes=entry_node, log_level=level), "mode": "Edge"}
         )
         transport.start()
         submitter = Submitter(

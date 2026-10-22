@@ -21,7 +21,9 @@ its own `/octopus/1/...` content topics. Coordinators are still needed for GitHu
 - Mode is `Core`. `Edge` (client-only) would save resources but has not been evaluated.
 
 ## Environment variables (`config.from_env`)
-`OCTOPUS_ENTRY_NODES` (comma separated), `OCTOPUS_PUBLIC_IP` (coordinators), `OCTOPUS_TCP_PORT`, `OCTOPUS_NAT`, `OCTOPUS_ROOT_KEY` (runners, see below).
+`OCTOPUS_ENTRY_NODES` (comma separated), `OCTOPUS_PUBLIC_IP` (coordinators), `OCTOPUS_TCP_PORT`, `OCTOPUS_NAT`, `OCTOPUS_ROOT_KEY` (runners, see below), `OCTOPUS_LOG_LEVEL` (all roles: the library's `log-level`, `INFO` by default).
+
+The library is compiled with every TRACE line in it, so it filters by `log-level` only when it is also built with `-d:chronicles_runtime_filtering=on`. The CI and `lib-latest` builds are (`.github/actions/liblogosdelivery`); an older build writes thousands of TRACE and DEBUG lines a second whatever the level (#93).
 
 ## Coordinator discovery (signed adverts, pinned root key)
 
