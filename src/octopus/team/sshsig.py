@@ -10,6 +10,7 @@ import base64
 import hashlib
 import struct
 import subprocess
+import tempfile
 from pathlib import Path
 
 from cryptography.exceptions import InvalidSignature
@@ -145,18 +146,36 @@ def parse_authorized_keys(text: str) -> list[bytes]:
 
 
 def ssh_keygen_sign(message: bytes, key_file: Path, namespace: str) -> str:
-    """Sign with the user's own key through `ssh-keygen` (it uses the agent when it holds the key)."""
-    try:
-        proc = subprocess.run(
-            ["ssh-keygen", "-Y", "sign", "-f", str(key_file), "-n", namespace],
-            input=message,
-            capture_output=True,
-            timeout=120,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError) as e:
-        raise SshSigError(f"could not run ssh-keygen: {e}") from e
-    if proc.returncode != 0:
-        detail = proc.stderr.decode(errors="replace").strip()
-        raise SshSigError(f"ssh-keygen could not sign: exit code: {proc.returncode}: {detail}")
-    return proc.stdout.decode()
+    """Sign with the user's own key through `ssh-keygen` (it uses the agent when it holds the key).
+
+    The message goes in a temporary file, not on stdin. With stdin a pipe and a display set,
+    OpenSSH asks for the passphrase through `ssh-askpass`, which is often not installed. With
+    stdin left to the user's terminal, it asks there (#97).
+    """
+    with tempfile.TemporaryDirectory(prefix="octopus-sshsig-") as tmp:
+        data = Path(tmp) / "message"
+        data.write_bytes(message)
+        try:
+            proc = subprocess.run(
+                ["ssh-keygen", "-Y", "sign", "-f", str(key_file), "-n", namespace, str(data)],
+                capture_output=True,
+                timeout=120,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError) as e:
+            raise SshSigError(f"could not run ssh-keygen: {e}") from e
+        if proc.returncode != 0:
+            detail = proc.stderr.decode(errors="replace").strip()
+            hint = ""
+            if "ssh_askpass" in detail or "passphrase" in detail:
+                hint = (
+                    "; if no passphrase was asked: run ssh-add first, or set "
+                    "SSH_ASKPASS_REQUIRE=never"
+                )
+            raise SshSigError(
+                f"ssh-keygen could not sign: exit code: {proc.returncode}: {detail}{hint}"
+            )
+        try:
+            return (Path(tmp) / "message.sig").read_text()
+        except OSError as e:
+            raise SshSigError(f"ssh-keygen wrote no signature: {e}") from e

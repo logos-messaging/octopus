@@ -1,5 +1,8 @@
 import base64
+import shutil
 import struct
+import subprocess
+from pathlib import Path
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -14,6 +17,7 @@ from octopus.team import (
     issue_delegation,
     make_member_list,
     make_node_proof,
+    sshsig,
     verify_member_list,
 )
 from octopus.team.sshsig import (
@@ -209,3 +213,49 @@ def test_several_scopes_add_up(world, team_key):
     state, *_ = world
     assert state.accept_list(make_member_list(team_key, "repo:acme/app", 1, ["carol"], NOW))
     assert state.is_member_login("carol") and state.is_member_login("alice")
+
+
+# signing through ssh-keygen (#97)
+
+
+def test_ssh_keygen_signs_a_file_not_stdin(tmp_path, monkeypatch):
+    # With stdin a pipe and a display set, OpenSSH asks for the passphrase through ssh-askpass,
+    # which is often missing. A file argument leaves stdin to the user's terminal.
+    seen = {}
+
+    def fake_run(cmd, **kw):
+        seen.update(cmd=cmd, kw=kw)
+        message = Path(cmd[-1])
+        Path(f"{message}.sig").write_text("SIG")
+        seen["message"] = message.read_bytes()
+        return subprocess.CompletedProcess(cmd, 0, b"", b"")
+
+    monkeypatch.setattr(sshsig.subprocess, "run", fake_run)
+    assert sshsig.ssh_keygen_sign(b"hello", tmp_path / "id_ed25519", "ns") == "SIG"
+    assert seen["cmd"][:7] == ["ssh-keygen", "-Y", "sign", "-f", str(tmp_path / "id_ed25519"), "-n", "ns"]
+    assert seen["message"] == b"hello"
+    assert "input" not in seen["kw"] and "stdin" not in seen["kw"]
+    assert not Path(seen["cmd"][-1]).exists()  # the temporary files are gone
+
+
+def test_ssh_keygen_failure_to_ask_for_the_passphrase_says_what_to_do(tmp_path, monkeypatch):
+    stderr = (
+        b"ssh_askpass: exec(/usr/bin/ssh-askpass): No such file or directory\n"
+        b'Load key "k": incorrect passphrase supplied to decrypt private key'
+    )
+    monkeypatch.setattr(
+        sshsig.subprocess, "run", lambda cmd, **kw: subprocess.CompletedProcess(cmd, 255, b"", stderr)
+    )
+    with pytest.raises(SshSigError, match="SSH_ASKPASS_REQUIRE=never"):
+        sshsig.ssh_keygen_sign(b"hello", tmp_path / "k", "ns")
+
+
+@pytest.mark.skipif(shutil.which("ssh-keygen") is None, reason="no ssh-keygen")
+def test_ssh_keygen_signature_verifies(tmp_path):
+    key = tmp_path / "k"
+    subprocess.run(
+        ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)], check=True, capture_output=True
+    )
+    sig = sshsig.ssh_keygen_sign(b"node keys", key, "octopus-test")
+    (pub,) = parse_authorized_keys((tmp_path / "k.pub").read_text())
+    assert verify_sshsig(sig, "octopus-test", b"node keys") == pub
