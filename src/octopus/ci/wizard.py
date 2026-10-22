@@ -78,6 +78,8 @@ def init_ci(
     if os_name() not in ("linux", "macos"):
         add(Check("platform", Status.FAIL, f"only Linux and macOS nodes: {os_name()}"))
         return checks
+    if add(_gh_login_check(gh)).failed:
+        return checks
     home.identity()
     admin = _is_admin(gh, target)
     if admin:
@@ -85,7 +87,7 @@ def init_ci(
     elif admin is False:
         add(Check("role", Status.OK, f"member of {name}"))
     else:
-        add(Check("role", Status.WARN, "could not tell: is gh logged in? continuing as a member"))
+        add(Check("role", Status.WARN, "could not tell if you are an admin: continuing as a member"))
     if add(_team_key(home, gh, target, bool(admin))).failed:
         return checks
     if admin and home.team_key_path.exists():
@@ -106,6 +108,16 @@ def init_ci(
     if start_service:
         add(_install(install or service.install, data_dir))
     return checks
+
+
+def _gh_login_check(gh: Gh) -> Check:
+    if gh.login():
+        return Check("gh login", Status.OK, "logged in")
+    return Check(
+        "gh login",
+        Status.FAIL,
+        "gh is not logged in: run gh auth login, then run this again",
+    )
 
 
 def _is_admin(gh: Gh, target: manual.Target) -> bool | None:
@@ -173,7 +185,7 @@ def _sync_team(home: Home, gh: Gh, target: manual.Target, now: float) -> Check:
 def _prove(home: Home, gh: Gh, now: float, ssh_key: Path | None, login: str | None) -> Check:
     who = login or gh.login()
     if not who:
-        who = str(typer.prompt("Your GitHub login")).strip()
+        return Check("membership proof", Status.FAIL, "no GitHub login: pass --login")
     key = (ssh_key or DEFAULT_SSH_KEY).expanduser()
     pub = Path(f"{key}.pub")
     try:
