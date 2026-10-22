@@ -146,15 +146,22 @@ class CiRuntime:
             return False
         try:
             signer = key_from_text(held[0])
-            delegation = Delegation.model_validate_json(held[1])
+            delegations = {}
+            for text in held[1]:
+                d = Delegation.model_validate_json(text)
+                delegations[d.scope] = d
         except (TeamError, ValueError):
             log.warning("unreadable delegation: run: octopus team sync")
             return False
         now = self._clock.now()
-        if delegation.not_after - now < DELEGATION_WARN_S:
+        if delegations and min(d.not_after for d in delegations.values()) - now < DELEGATION_WARN_S:
             log.warning("the sync delegation ends soon: run: octopus team sync")
         done = False
         for scope in scopes:
+            delegation = delegations.get(scope)
+            if delegation is None:
+                log.warning("no delegation for %s, its list is not renewed: run: octopus team sync", scope)
+                continue
             previous = next((ml for ml in self.team.current() if ml.scope == scope), None)
             try:
                 ml = build_list(

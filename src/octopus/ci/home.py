@@ -108,18 +108,25 @@ class Home:
                 continue
         return out
 
-    def save_delegate(self, delegate_key_pem_b64: str, delegation_json: str) -> None:
+    def save_delegate(self, delegate_key_pem_b64: str, delegations: list[str]) -> None:
+        """The delegated key and one delegation (JSON) per scope: a delegation names one scope."""
         self._write("delegate.key", delegate_key_pem_b64)
-        self._write("delegation.json", delegation_json)
+        self._write("delegation.json", json.dumps([json.loads(d) for d in delegations]))
 
-    def delegate(self) -> tuple[str, str] | None:
+    def delegate(self) -> tuple[str, list[str]] | None:
+        """(the delegated key, its delegations as JSON), or None when this node never synced.
+
+        A file written before delegations were per scope holds one object, read as a list of one.
+        """
         try:
-            return (
-                self._path("delegate.key").read_text().strip(),
-                self._path("delegation.json").read_text(),
-            )
+            key = self._path("delegate.key").read_text().strip()
+            raw = json.loads(self._path("delegation.json").read_text())
         except OSError:
             return None
+        except ValueError:
+            return key, []
+        items = raw if isinstance(raw, list) else [raw]
+        return key, [json.dumps(item) for item in items]
 
     # allowlist and sync scopes
 
