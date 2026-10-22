@@ -10,6 +10,16 @@ on:
         description: "Upload the libraries to the lib-latest release"
         type: boolean
         default: false
+  # release.yml builds the same libraries for a version release, without publishing them here.
+  workflow_call:
+    inputs:
+      ref:
+        description: "Tag or commit to build (default: the caller's)"
+        type: string
+        default: ""
+      publish:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -28,6 +38,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.ref }}
           submodules: true
 
       # logos-delivery marks its own submodules update=none, so init only this one.
