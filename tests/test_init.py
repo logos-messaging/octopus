@@ -65,6 +65,24 @@ def test_runner_from_nothing(tmp_path, svc):
     assert svc.specs and "--config" in svc.specs[0].argv
 
 
+def test_runner_unlimited_parallel_jobs(tmp_path, svc):
+    config = tmp_path / "runner.json"
+    answers = lines("coordinator", KEY, "", "unlimited", "acme/app", "", "n")
+    result = init("--role", "runner", "--config", str(config), input=answers)
+    assert result.exit_code == 0, result.output
+    assert "[changed] max jobs  unlimited" in result.output
+    assert json.loads((tmp_path / "runner.settings.json").read_text())["max_jobs"] == 0
+
+
+def test_runner_bad_parallel_jobs_keeps_current(tmp_path, svc):
+    config = tmp_path / "runner.json"
+    answers = lines("coordinator", KEY, "", "lots", "acme/app", "", "n")
+    result = init("--role", "runner", "--config", str(config), input=answers)
+    assert result.exit_code == 0, result.output
+    assert "max jobs  kept 1" in result.output
+    assert json.loads((tmp_path / "runner.settings.json").read_text())["max_jobs"] == 1
+
+
 def test_runner_rerun_changes_nothing(tmp_path, svc):
     config = tmp_path / "runner.json"
     init("--role", "runner", "--config", str(config),

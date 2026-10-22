@@ -211,7 +211,9 @@ RootKeyOption = typer.Option(
     help="Pinned root public key: discover the coordinators it authorises (or set OCTOPUS_ROOT_KEY).",
 )
 LabelsOption = typer.Option(None, "--labels", help="Extra runner labels (repeatable).")
-MaxJobsOption = typer.Option(None, "--max-jobs", min=1, help="Jobs to run at the same time.")
+MaxJobsOption = typer.Option(
+    None, "--max-jobs", help="Jobs to run at the same time: a number, or unlimited."
+)
 
 
 def _fail(message: str, code: int) -> typer.Exit:
@@ -224,10 +226,10 @@ def _resolve_settings(
     entry_nodes: list[str] | None,
     coordinators: list[str] | None,
     labels: list[str] | None,
-    max_jobs: int | None,
+    max_jobs: str | None,
     root_key: str | None = None,
 ):
-    from .agent.config import ConfigError, RunnerConfig, settings_path
+    from .agent.config import ConfigError, RunnerConfig, parse_max_jobs, settings_path
     from .agent.trust import default_config_path
 
     path = settings_path(config or default_config_path())
@@ -238,7 +240,7 @@ def _resolve_settings(
             entry_nodes=entry_nodes or (),
             coordinators=coordinators or (),
             labels=labels or (),
-            max_jobs=max_jobs,
+            max_jobs=parse_max_jobs(max_jobs) if max_jobs is not None else None,
             root_key=root_key,
         )
     except ConfigError as e:
@@ -252,7 +254,7 @@ def runner_setup(
     entry_node: list[str] | None = EntryNodeOption,
     coordinator: list[str] | None = CoordinatorOption,
     labels: list[str] | None = LabelsOption,
-    max_jobs: int | None = MaxJobsOption,
+    max_jobs: str | None = MaxJobsOption,
     root_key: str | None = RootKeyOption,
 ) -> None:
     """Save this runner's settings (entry nodes, trusted coordinators, labels, max jobs)."""
@@ -276,7 +278,7 @@ def runner_start(
     entry_node: list[str] | None = EntryNodeOption,
     coordinator: list[str] | None = CoordinatorOption,
     labels: list[str] | None = LabelsOption,
-    max_jobs: int | None = MaxJobsOption,
+    max_jobs: str | None = MaxJobsOption,
     root_key: str | None = RootKeyOption,
     allow_empty: bool = typer.Option(
         False, "--allow-empty", help="Start even if nothing is allowed (rejects every job)."
@@ -284,6 +286,7 @@ def runner_start(
     connect_timeout: float = typer.Option(60.0, help="Seconds to wait for the network."),
 ) -> None:
     """Offer this machine as a runner (runs in the foreground until Ctrl-C)."""
+    from .agent.config import format_max_jobs
     from .agent.runner import default_data_dir
     from .agent.runner_agent import RunnerAgent, read_state
     from .transport.logos import LogosError, LogosLibraryError, LogosTransport
@@ -317,7 +320,10 @@ def runner_start(
     agent.install_signal_handlers()
     if not transport.wait_connected(connect_timeout):
         typer.echo("warning: not connected to the network yet, still trying", err=True)
-    typer.echo(f"runner online: {agent.runner_id} (max jobs: {settings.max_jobs}); Ctrl-C to stop")
+    typer.echo(
+        f"runner online: {agent.runner_id} "
+        f"(max jobs: {format_max_jobs(settings.max_jobs)}); Ctrl-C to stop"
+    )
     agent.wait()
     typer.echo("runner stopped")
 
@@ -325,6 +331,7 @@ def runner_start(
 @runner_app.command("status")
 def runner_status() -> None:
     """Show whether the runner is running and how busy it is."""
+    from .agent.config import format_max_jobs
     from .agent.runner import default_data_dir
     from .agent.runner_agent import read_state
 
@@ -334,7 +341,7 @@ def runner_status() -> None:
         raise typer.Exit(code=EXIT_NOT_RUNNING)
     typer.echo(
         f"running: pid {state['pid']}, runner {state['runner_id']}, "
-        f"busy {state['busy']}/{state['max_jobs']}"
+        f"busy {state['busy']}/{format_max_jobs(state['max_jobs'])}"
     )
 
 

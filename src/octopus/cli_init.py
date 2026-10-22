@@ -117,13 +117,18 @@ def _runner_allowlist(allowlist) -> Check:
 
 
 def _runner_max_jobs(settings) -> Check:
-    value = typer.prompt("Jobs to run at the same time", default=settings.max_jobs, type=int)
-    if value < 1:
-        return Check("max jobs", Status.WARN, f"kept {settings.max_jobs}: expected at least 1")
+    from .agent.config import ConfigError, format_max_jobs, parse_max_jobs
+
+    current = format_max_jobs(settings.max_jobs)
+    answer = typer.prompt("Jobs to run in parallel (a number, or unlimited)", default=current)
+    try:
+        value = parse_max_jobs(answer)
+    except ConfigError as e:
+        return Check("max jobs", Status.WARN, f"kept {current}: {e}")
     if value == settings.max_jobs:
-        return Check("max jobs", Status.OK, str(value))
+        return Check("max jobs", Status.OK, format_max_jobs(value))
     settings.max_jobs = value
-    return Check("max jobs", Status.CHANGED, str(value))
+    return Check("max jobs", Status.CHANGED, format_max_jobs(value))
 
 
 def _runner_service(config: Path | None) -> Check:

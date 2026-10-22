@@ -140,7 +140,7 @@ class RunnerAgent:
                 os=platform.system().lower(),
                 arch=platform.machine().lower(),
                 labels=tuple(self._config.labels),
-                capacity=self._config.max_jobs,
+                capacity=self._config.capacity,
                 pubkey=encode_public_key(key.public_key()),
             ),
         )
@@ -199,7 +199,7 @@ class RunnerAgent:
 
     def _accept(self, offer: JobOffer) -> FailureReason | None:
         with self._lock:
-            if self._stopping or len(self._active) >= self._config.max_jobs:
+            if self._stopping or not self._config.has_free_slot(len(self._active)):
                 return FailureReason.NO_IDLE_RUNNER
             manager = self._manager_factory()
             self._active[offer.job_id] = manager

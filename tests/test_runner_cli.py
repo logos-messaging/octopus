@@ -7,7 +7,15 @@ import pytest
 from pydantic import SecretStr
 from typer.testing import CliRunner
 
-from octopus.agent.config import ConfigError, RunnerConfig, settings_path
+from octopus.agent.config import (
+    UNLIMITED_CAPACITY,
+    UNLIMITED_JOBS,
+    ConfigError,
+    RunnerConfig,
+    format_max_jobs,
+    parse_max_jobs,
+    settings_path,
+)
 from octopus.agent.runner import RunResult
 from octopus.agent.runner_agent import RunnerAgent, read_state, state_path
 from octopus.agent.trust import Allowlist
@@ -57,7 +65,7 @@ def test_config_missing_file_is_default(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "content", ["not json", "[]", '{"max_jobs": 0}', '{"bogus": 1}', '{"coordinators": ["x"]}']
+    "content", ["not json", "[]", '{"max_jobs": -1}', '{"bogus": 1}', '{"coordinators": ["x"]}']
 )
 def test_config_invalid_is_rejected(tmp_path, content):
     path = tmp_path / "s.json"
@@ -228,6 +236,48 @@ def test_agent_respects_max_jobs(tmp_path):
     w.agent.stop()
 
 
+def test_agent_unlimited_accepts_parallel_jobs(tmp_path):
+    gate = threading.Event()
+    w = World(tmp_path, max_jobs=UNLIMITED_JOBS, manager=FakeManager(gate=gate))
+    for n in range(20):
+        assert w.offer(f"job-{n}").outcome is OfferOutcome.ACCEPTED
+    assert w.agent.busy == 20
+    gate.set()
+    assert wait_for(lambda: w.agent.busy == 0)
+    w.agent.stop()
+
+
+def test_unlimited_runner_advertises_many_slots(tmp_path):
+    seen: list[Presence] = []
+    w = World(tmp_path, max_jobs=UNLIMITED_JOBS)
+    from octopus.proto import PRESENCE_TOPIC
+
+    MemoryTransport(w.bus).subscribe(
+        PRESENCE_TOPIC, lambda t, p: seen.append(Presence.model_validate_json(p))
+    )
+    w.agent._presence.tick()
+    assert seen[-1].capacity == UNLIMITED_CAPACITY
+    w.agent.stop()
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [("1", 1), ("8", 8), ("unlimited", 0), (" Unlimited ", 0)],
+)
+def test_parse_max_jobs(text, expected):
+    assert parse_max_jobs(text) == expected
+
+
+@pytest.mark.parametrize("text", ["0", "-2", "many", ""])
+def test_parse_max_jobs_rejects_bad_values(text):
+    with pytest.raises(ConfigError):
+        parse_max_jobs(text)
+
+
+def test_format_max_jobs():
+    assert format_max_jobs(0) == "unlimited" and format_max_jobs(4) == "4"
+
+
 def test_agent_stop_stops_running_job_and_clears_state(tmp_path):
     gate = threading.Event()
     manager = FakeManager(gate=gate)
@@ -287,6 +337,24 @@ def test_setup_saves_and_merges(env):
     r = cli.invoke(app, ["runner", "setup", "--config", str(cfg), "--labels", "gpu"])
     assert RunnerConfig.load(settings_path(cfg)).coordinators == [key]
     assert RunnerConfig.load(settings_path(cfg)).labels == ["gpu"]
+
+
+def test_setup_accepts_unlimited_max_jobs(env):
+    cfg = env / "runner.json"
+    r = cli.invoke(
+        app,
+        ["runner", "setup", "--config", str(cfg), "--coordinator", pubkey(), "--max-jobs", "unlimited"],
+    )
+    assert r.exit_code == 0, r.output
+    assert RunnerConfig.load(settings_path(cfg)).max_jobs == UNLIMITED_JOBS
+
+
+def test_setup_rejects_bad_max_jobs(env):
+    r = cli.invoke(
+        app, ["runner", "setup", "--config", str(env / "r.json"), "--max-jobs", "0"]
+    )
+    assert r.exit_code == 3
+    assert "max jobs" in r.output
 
 
 def test_setup_rejects_bad_coordinator_key(env):

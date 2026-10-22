@@ -59,7 +59,7 @@ octopus runner stop
 
 Settings and the allowlist live in the platform config dir (`--config` selects another
 location; both files sit next to each other). `--entry-node`, `--labels` and `--max-jobs`
-can be saved with `setup` or passed to `start`; `OCTOPUS_ENTRY_NODES`, `OCTOPUS_TCP_PORT`
+(a number, or `unlimited`; default 1) can be saved with `setup` or passed to `start`; `OCTOPUS_ENTRY_NODES`, `OCTOPUS_TCP_PORT`
 and `OCTOPUS_NAT` override the saved file, and flags override both. Exit codes: 2 usage,
 3 bad config, 4 network/library failure, 5 not running. The runner needs no GitHub login:
 the coordinator checks org membership. Until coordinator discovery (#38) the coordinator's
