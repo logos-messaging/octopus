@@ -15,6 +15,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from .engine import ExecResult, LegInfo
+from .sandbox import Sandbox
 
 log = logging.getLogger(__name__)
 
@@ -38,8 +39,9 @@ class GitExecutor:
     """Checks out the commit in a fresh directory and runs `.octopus/ci.sh` there.
 
     The checkout uses the machine owner's git credentials (`gh auth setup-git`), so it works for
-    any repo the owner can read. The directory is deleted afterwards. This is not a sandbox: the
-    job runs as the owner (see docs/decentralized-ci.md).
+    any repo the owner can read. The directory is deleted afterwards. Without a `sandbox` this is
+    not one: the job runs as the owner (see docs/decentralized-ci.md). With one, the script runs in
+    a throwaway container that sees only the checkout, and the owner's credentials stay outside.
     """
 
     def __init__(
@@ -49,9 +51,11 @@ class GitExecutor:
         url: str = "https://github.com/{repo}.git",
         timeout_s: float = 6 * 3600.0,
         poll_s: float = 0.5,
+        sandbox: Sandbox | None = None,
     ) -> None:
         self._root = work_root
         self._url = url
+        self._sandbox = sandbox
         self._timeout_s = timeout_s
         self._poll_s = poll_s
 
@@ -68,11 +72,40 @@ class GitExecutor:
             script = work / SCRIPT
             if not script.is_file():
                 return ExecResult(127, f"no {SCRIPT} in the repo")
+            if self._sandbox is not None:
+                return self._run_sandboxed(leg, tag, work, on_line, should_stop)
             return self._stream(
                 ["bash", str(script)], work, self._job_env(leg), on_line, should_stop
             )
         finally:
             shutil.rmtree(work, ignore_errors=True)
+
+    def _run_sandboxed(self, leg, tag, work, on_line, should_stop) -> ExecResult:
+        assert self._sandbox is not None
+        why = Sandbox.supported()
+        if why is not None:
+            return ExecResult(126, f"could not sandbox the job: {why}")
+        name = f"octopus-{tag}"
+        argv = self._sandbox.run_argv(name, str(work), SCRIPT, self._leg_vars(leg))
+        host_env = {k: v for k, v in os.environ.items() if k not in _SECRET_ENV}
+        try:
+            return self._stream(argv, work, host_env, on_line, should_stop)
+        finally:
+            self._remove_container(name)
+
+    def _remove_container(self, name: str) -> None:
+        """Make sure nothing outlives the leg, whatever happened to the client process."""
+        assert self._sandbox is not None
+        try:
+            subprocess.run(
+                self._sandbox.kill_argv(name),
+                capture_output=True,
+                timeout=30,
+                check=False,
+                stdin=subprocess.DEVNULL,
+            )
+        except (OSError, subprocess.SubprocessError):
+            log.warning("could not remove the container: %s", name)
 
     def _checkout(self, leg, work, on_line, should_stop) -> ExecResult | None:
         url = self._url.format(repo=leg.repo)
@@ -89,18 +122,23 @@ class GitExecutor:
         return None
 
     @staticmethod
-    def _job_env(leg: LegInfo) -> dict[str, str]:
+    def _leg_vars(leg: LegInfo) -> dict[str, str]:
+        """What a job is told about its leg; the only variables a sandboxed job gets."""
+        return {
+            "CI": "true",
+            "OCTOPUS_CI": "true",
+            "OCTOPUS_REPO": leg.repo,
+            "OCTOPUS_SHA": leg.sha,
+            "OCTOPUS_REF": leg.ref,
+            "OCTOPUS_EVENT": leg.event,
+            "OCTOPUS_OS": leg.os,
+            "OCTOPUS_RUN_ID": leg.run_id,
+        }
+
+    @classmethod
+    def _job_env(cls, leg: LegInfo) -> dict[str, str]:
         env = {k: v for k, v in os.environ.items() if k not in _SECRET_ENV}
-        env.update(
-            CI="true",
-            OCTOPUS_CI="true",
-            OCTOPUS_REPO=leg.repo,
-            OCTOPUS_SHA=leg.sha,
-            OCTOPUS_REF=leg.ref,
-            OCTOPUS_EVENT=leg.event,
-            OCTOPUS_OS=leg.os,
-            OCTOPUS_RUN_ID=leg.run_id,
-        )
+        env.update(cls._leg_vars(leg))
         return env
 
     def _stream(self, cmd, cwd, env, on_line, should_stop) -> ExecResult:

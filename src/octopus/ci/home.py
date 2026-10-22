@@ -10,6 +10,7 @@ from pathlib import Path
 
 from ..crypto import load_or_create_private_key, load_or_create_signing_key
 from ..team import MemberList, NodeProof
+from .sandbox import Sandbox, SandboxError
 
 CI_DIR = "ci"
 
@@ -135,3 +136,25 @@ class Home:
     def scopes(self) -> list[str]:
         raw = self._read_json("sync-scopes.json")
         return list(raw) if isinstance(raw, list) else []
+
+    # sandbox
+
+    def save_sandbox(self, sandbox: Sandbox) -> None:
+        self._write("sandbox.json", sandbox.dumps())
+
+    def clear_sandbox(self) -> bool:
+        try:
+            self._path("sandbox.json").unlink()
+        except FileNotFoundError:
+            return False
+        return True
+
+    def sandbox(self) -> Sandbox | None:
+        """The container settings, or None when jobs run as the owner. Raises on a corrupt file."""
+        try:
+            text = self._path("sandbox.json").read_text()
+        except FileNotFoundError:
+            return None
+        except OSError as e:
+            raise SandboxError(f"could not read the sandbox settings: {e}") from e
+        return Sandbox.loads(text)

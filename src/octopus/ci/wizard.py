@@ -30,6 +30,8 @@ from ..team.state import DELEGATION_TTL_S
 from ..team.sync import build_list, key_to_text
 from .gh import Gh
 from .home import Allow, Home
+from .sandbox import Sandbox, SandboxError
+from .sandbox_setup import SandboxSetupError, enable, find_runtime
 
 TEAM_FILE = ".octopus/team.pub"
 DEFAULT_SSH_KEY = Path("~/.ssh/id_ed25519")
@@ -95,7 +97,9 @@ def init_ci(
     add(_prove(home, gh, now, ssh_key, login))
     if checks[-1].failed:
         return checks
-    if add(_job_access_notice(name, assume_yes)).failed:
+    if add(_sandbox(home, assume_yes)).failed:
+        return checks
+    if add(_job_access_notice(name, assume_yes, home.sandbox())).failed:
         return checks
     allow = home.allow()
     entry = target.name
@@ -217,14 +221,62 @@ JOB_ACCESS_NOTICE = (
     "A CI job runs on this machine as you, in a fresh directory but not in a sandbox.\n"
     "A job from any branch of {name} can read your GitHub login (the gh token or the keychain),\n"
     "your SSH keys and agent, and everything else your user can read. Only serve repos whose\n"
-    "writers you would trust with your account. Running jobs as a separate OS user or in a\n"
-    "container is not built yet."
+    "writers you would trust with your account. On Linux, run jobs in a container instead:\n"
+    "octopus ci sandbox enable --image <image>. A macOS VM sandbox is not built yet."
 )
 
 
-def _job_access_notice(name: str, assume_yes: bool) -> Check:
+SANDBOX_NOTICE = (
+    "Jobs of {name} run in a container ({image}) that sees only the checkout: not your GitHub\n"
+    "login, SSH keys or home directory. With network {network} they still reach the internet; see\n"
+    "docs/decentralized-ci.md for what else the container network gives them."
+)
+
+
+def _sandbox(home: Home, assume_yes: bool) -> Check:
+    """Offer to run the jobs in a container (Linux, with Podman or Docker installed)."""
+    try:
+        current = home.sandbox()
+    except SandboxError as e:
+        return Check("sandbox", Status.FAIL, f"{e}: run: octopus ci sandbox disable")
+    if current is not None:
+        return Check("sandbox", Status.OK, f"jobs run in {current.image} ({current.runtime})")
+    why = Sandbox.supported()
+    if why is not None:
+        return Check("sandbox", Status.SKIPPED, why)
+    runtime = find_runtime()
+    if runtime is None:
+        return Check(
+            "sandbox",
+            Status.SKIPPED,
+            "no podman or docker: install rootless Podman, then: octopus ci sandbox enable",
+        )
+    if assume_yes:
+        return Check("sandbox", Status.SKIPPED, "not asked with --yes: octopus ci sandbox enable")
+    if not typer.confirm(
+        f"Run jobs in a {runtime} container, so they cannot read your GitHub login or SSH keys?",
+        default=True,
+    ):
+        return Check("sandbox", Status.SKIPPED, "jobs run as you")
+    image = typer.prompt(
+        "Container image with the toolchain your jobs need, pinned by digest "
+        "(e.g. python:3.12-slim@sha256:...)"
+    )
+    try:
+        warnings = enable(home, Sandbox(image=image.strip(), runtime=runtime), say=typer.echo)
+    except (SandboxError, SandboxSetupError) as e:
+        return Check("sandbox", Status.FAIL, str(e))
+    for warning in warnings:
+        typer.echo(f"warning: {warning}", err=True)
+    return Check("sandbox", Status.CHANGED, f"jobs run in {image.strip()} ({runtime})")
+
+
+def _job_access_notice(name: str, assume_yes: bool, sandbox: Sandbox | None = None) -> Check:
     """Say what a job can reach, and make the owner agree before the repo is allowed."""
-    typer.echo(JOB_ACCESS_NOTICE.format(name=name))
+    if sandbox is not None:
+        typer.echo(SANDBOX_NOTICE.format(name=name, image=sandbox.image, network=sandbox.network))
+    else:
+        typer.echo(JOB_ACCESS_NOTICE.format(name=name))
     if assume_yes:
         return Check("job access", Status.OK, "acknowledged with --yes")
     if not typer.confirm(f"Allow jobs of {name} to run on this machine, as you?", default=False):

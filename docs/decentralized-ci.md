@@ -150,16 +150,87 @@ used: lists are re-published every 5 minutes and on request.
 
 ## Security notes
 
-- **A job can read your GitHub login and use your SSH agent.** A job runs `.octopus/ci.sh` on the
-  machine as its owner, in a fresh directory but with no sandbox. Whoever can push a branch to an
-  allowed repo can make it run `gh auth token` or `git credential fill` (the token is in the `gh`
-  config or the keychain, not only in the environment), read `~/.ssh`, and reach anything else
-  the owner's user can. Octopus removes `GITHUB_TOKEN`, `GH_TOKEN`, `SSH_AUTH_SOCK` and the team
-  passphrase from the job environment, which hides them from a careless script and no more.
-  `octopus ci init` prints this and asks the owner to confirm (`--yes` skips the question, not the
-  notice). Only serve repos whose writers you would trust with your account. Running jobs as a
-  separate OS user or in a container, with the commit statuses posted by the node outside of it,
-  is the real fix and is not built yet.
+- **By default a job can read your GitHub login and use your SSH agent.** A job runs
+  `.octopus/ci.sh` on the machine as its owner, in a fresh directory but with no sandbox. Whoever
+  can push a branch to an allowed repo can make it run `gh auth token` or `git credential fill`
+  (the token is in the `gh` config or the keychain, not only in the environment), read `~/.ssh`,
+  and reach anything else the owner's user can. Octopus removes `GITHUB_TOKEN`, `GH_TOKEN`,
+  `SSH_AUTH_SOCK` and the team passphrase from the job environment, which hides them from a
+  careless script and no more. `octopus ci init` prints this and asks the owner to confirm
+  (`--yes` skips the question, not the notice). Only serve repos whose writers you would trust
+  with your account, or turn on the container sandbox below (Linux hosts).
+
+## Sandbox: jobs in a container (Linux hosts)
+
+**Optional.** A node works without it, and nothing here needs Docker: you install a container
+runtime (rootless Podman is preferred, Docker works) only if you turn the sandbox on. The
+warnings below about the `docker` group apply only to a node that chose rootful Docker.
+
+```bash
+octopus ci sandbox enable --image <image>@sha256:<digest>   # then restart the node (install-service)
+octopus ci sandbox status | disable
+```
+
+`octopus ci init` offers it: on Linux, when Podman or Docker is installed, it asks "Run jobs in a
+container?" and which image, turns the sandbox on, and replaces the "jobs run as you" warning by a
+short note on what the container can still reach. With `--yes` it asks nothing and enables
+nothing (there is no image to choose for you): it prints the command. Without a runtime, or on
+macOS, nothing changes: the warning stays. Later, making it the default for Linux nodes is the
+plan, once it has run on a real Docker or Podman.
+
+The node stays trusted: it clones the commit with the owner's git credentials and posts the
+commit status. The script runs in a throwaway container (`docker` or `podman`, `--runtime`) that
+sees **only the checkout**, mounted at `/work`:
+
+- no `gh` config, SSH keys or agent, home directory or keychain of the owner; `HOME` is a
+  temporary directory;
+- an environment of only `CI` and `OCTOPUS_*` (not the node's), read-only root filesystem,
+  all capabilities dropped, `no-new-privileges`, limits on memory (`--memory`, default 4g), CPUs
+  (`--cpus`, 2) and processes (1024), and `--network` (default `bridge`; `none` cuts the job off);
+- run as the owner's uid inside the container, removed afterwards (`--rm`, and `rm -f` if the node
+  stops it).
+
+**Choosing the image.** It must hold what the job runs. `ubuntu:24.04` has no Python, so this
+repo's `.octopus/ci.sh` ("no Python 3.10 or newer found") needs an image such as
+`python:3.12-slim` (bash, Python and venv are in it). **Pin it by digest**
+(`python:3.12-slim@sha256:...`, from `docker image inspect --format '{{index .RepoDigests 0}}'
+python:3.12-slim` after a pull), or the tag can change under the node; `enable` says so when it
+is not pinned.
+
+**The image is your choice, never the repo's:** it needs the toolchain the job uses (for Octopus's
+own `.octopus/ci.sh`, Python and `make`). Nothing is cached between jobs. A job with the network on
+can still send the checkout out of the machine, but the checkout holds no credentials.
+
+**Which runtime.** Prefer **rootless Podman** (or rootless Docker) for the node's user. To run
+`docker run` with rootful Docker, that user must be in the `docker` group, and anyone in it is
+root on the host (`docker run -v /:/host ...`; the job cannot do that, because the socket is not
+mounted in its container). That makes the dedicated user of a VPS node root-equivalent and
+removes the separation it is there for. `enable` warns when it sees it. Rootless Podman keeps the
+node's user unprivileged, and by default (as far as I know) does not give containers the host's
+loopback.
+
+**What the network gives a job.** With the default network (`bridge`), a job in the container
+can reach more than the internet:
+- **services of the host**, through the container gateway (for Docker `172.17.0.1`): every service
+  that listens on `0.0.0.0`, including this node's own port;
+- on a **cloud VPS, the metadata service** at `169.254.169.254`: if the instance has a role or a
+  service account, a job can read its credentials from there.
+
+`octopus ci sandbox enable` warns about it. Use `--network none` for a job that needs no network,
+or block both. For example, with rootful Docker (a sketch: check it on your host and your
+firewall before relying on it):
+
+```bash
+iptables -I DOCKER-USER -d 169.254.169.254 -j DROP           # the metadata service
+iptables -I INPUT -i docker0 -m conntrack --ctstate NEW -j DROP   # containers to host services
+```
+
+Where possible, make the node and any local service listen on `127.0.0.1` only.
+
+Limits: Linux hosts only. A `macos` leg needs a macOS VM (for example Tart), which is not built:
+`enable` refuses on macOS, and a node with a sandbox configured on another OS fails the leg with
+exit code 126 rather than running it unprotected. This is container isolation (shared kernel), not
+a VM. Not yet verified against a real Docker or Podman, only against a fake runtime in the tests.
 - Membership: team key -> signed member list (or a delegation, 30 days, scoped to one org/repo) ->
   GitHub login -> SSH signature of the node's keys (checked against `github.com/<login>.keys`) ->
   node. Removing someone takes effect at the next sync (a list lives 3 days at most).
