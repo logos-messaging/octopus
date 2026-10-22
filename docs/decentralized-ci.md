@@ -119,8 +119,8 @@ Findings that changed the code:
 ## Not verified
 
 - Real GitHub OIDC tokens through the full chain, and the reusable workflow itself (the spike
-  used a plain workflow). `github.job_workflow_sha` in a reusable workflow, and
-  `ssh-keygen -Y sign` with an agent, are untested.
+  used a plain workflow). Found on the first real run: `github.job_workflow_sha` is empty in a
+  reusable workflow, so the job reads `job_workflow_sha` from its own OIDC token instead.
 - Several team machines and a real fleet under load; a takeover with real laptops sleeping.
 - Speed and cost of a real pipeline: nothing is compared with a hosted run yet.
 - Windows nodes, RSA SSH keys, a sandbox for jobs, membership removal before the next sync.
