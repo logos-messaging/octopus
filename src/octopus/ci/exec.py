@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import shutil
 import subprocess
@@ -13,6 +14,8 @@ from collections.abc import Callable
 from pathlib import Path
 
 from .engine import ExecResult, LegInfo
+
+log = logging.getLogger(__name__)
 
 SCRIPT = ".octopus/ci.sh"
 # Never handed to a job: the owner's GitHub credentials and SSH agent. This hides them from the
@@ -159,7 +162,15 @@ class GhStatusPoster:
         except (OSError, subprocess.SubprocessError):
             return leg.sha
         parents = proc.stdout.split() if proc.returncode == 0 else []
-        return parents[1] if len(parents) == 2 else leg.sha
+        if len(parents) != 2:
+            log.warning(
+                "could not find the PR head of %s: the status of %s goes to the merge commit, "
+                "which no PR shows",
+                leg.sha,
+                leg.leg_id,
+            )
+            return leg.sha
+        return parents[1]
 
     def post(self, leg: LegInfo, state: str, description: str) -> None:
         proc = subprocess.run(

@@ -120,7 +120,11 @@ def ci_node(
         runtime = CiRuntime(
             home,
             transport,
-            Settings(os_name=os_name(), arch=platform.machine().lower()),
+            Settings(
+                os_name=os_name(),
+                arch=platform.machine().lower(),
+                name=platform.node().split(".")[0],
+            ),
         )
         runtime.start()
     except RuntimeError_ as e:
@@ -168,6 +172,7 @@ def ci_submit(
     """
     from .ci.messages import leg_audience, make_leg_id
     from .ci.submit import Leg, Submitter
+    from .ci.summary import render as render_summary
     from .crypto import decode_signing_public, encode_public_key, generate_private_key
     from .team import TeamState
     from .transport.config import runner_config
@@ -194,7 +199,7 @@ def ci_submit(
             )
         except Exception as e:  # noqa: BLE001 - any failure means: fall back to GitHub
             typer.echo(f"warning: could not get an OIDC token: {type(e).__name__}", err=True)
-            _write_outputs([], list(oses))
+            _fall_back_all(oses, "could not get an OIDC token (does the job have id-token: write?)")
             return
         legs.append(
             Leg(os_name, make_leg_id(repo, run_id, attempt, os_name), token, reply, repo)
@@ -212,13 +217,14 @@ def ci_submit(
             )
     except Exception as e:  # noqa: BLE001 - the fleet is down or unreachable: fall back
         typer.echo(f"warning: could not reach the fleet: {type(e).__name__}", err=True)
-        _write_outputs([], list(oses))
+        _fall_back_all(oses, f"could not reach the fleet ({type(e).__name__})")
         _exit_now()
         return
     for os_name, node in result.handled.items():
         typer.echo(f"{os_name}: taken by node {node}")
     for os_name in result.unhandled:
         typer.echo(f"{os_name}: no node took it, falls back to GitHub")
+    _write_summary(render_summary(list(oses), result))
     _write_outputs(sorted(result.handled), result.unhandled)
     _exit_now()
 
@@ -232,6 +238,23 @@ def _exit_now() -> None:
     sys.stdout.flush()
     sys.stderr.flush()
     os._exit(0)
+
+
+def _fall_back_all(oses: list[str], reason: str) -> None:
+    from .ci.submit import SubmitResult
+    from .ci.summary import render as render_summary
+
+    result = SubmitResult(unhandled=list(oses), reasons={o: reason for o in oses})
+    _write_summary(render_summary(list(oses), result))
+    _write_outputs([], list(oses))
+
+
+def _write_summary(markdown: str) -> None:
+    """Append to the job summary of the workflow run, when running in GitHub Actions."""
+    path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if path:
+        with open(path, "a") as f:
+            f.write(markdown + "\n")
 
 
 def _write_outputs(handled: list[str], unhandled: list[str]) -> None:

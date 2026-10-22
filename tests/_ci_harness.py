@@ -62,9 +62,11 @@ class FakeExecutor:
 class FakeStatus:
     def __init__(self) -> None:
         self.posts: list = []
+        self.descriptions: list[str] = []
 
     def post(self, leg, state, description):
         self.posts.append((leg.leg_id, state))
+        self.descriptions.append(description)
 
 
 def raw_pub(key: Ed25519PrivateKey) -> bytes:
@@ -105,7 +107,7 @@ class Machine:
             executor=self.executor,
             status=self.status,
             config=CiConfig(
-                allowed_repos=frozenset({REPO}), os_name=os_name, workflow_pin=PIN
+                allowed_repos=frozenset({REPO}), os_name=os_name, workflow_pin=PIN, name=login
             ),
             clock=world.clock,
             spawn=self.held.append if hold else (lambda fn: fn()),

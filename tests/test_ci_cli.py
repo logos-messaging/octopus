@@ -311,6 +311,7 @@ def test_submit_needs_the_workflow_environment(monkeypatch):
 def test_submit_falls_back_to_github_when_no_token_can_be_minted(tmp_path, monkeypatch):
     out = tmp_path / "out"
     monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "summary.md"))
     monkeypatch.setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "https://example.invalid/?x=1")
     monkeypatch.setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "t")
     monkeypatch.setenv("GITHUB_REPOSITORY", "acme/app")
@@ -326,6 +327,9 @@ def test_submit_falls_back_to_github_when_no_token_can_be_minted(tmp_path, monke
     written = dict(line.split("=", 1) for line in out.read_text().splitlines())
     assert json.loads(written["handled"]) == []
     assert json.loads(written["unhandled"]) == ["linux", "macos"]
+    summary = (tmp_path / "summary.md").read_text()
+    assert summary.count("GitHub-hosted runner") == 2
+    assert "could not get an OIDC token" in summary
 
 
 def test_submit_falls_back_and_exits_at_once_when_the_fleet_is_unreachable(tmp_path, monkeypatch):

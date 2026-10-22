@@ -43,7 +43,9 @@ class Leg:
 class SubmitResult:
     handled: dict[str, str] = field(default_factory=dict)  # os -> node id
     enc_pubs: dict[str, str] = field(default_factory=dict)  # os -> that node's reply-channel key
+    names: dict[str, str] = field(default_factory=dict)  # os -> the node's display name
     unhandled: list[str] = field(default_factory=list)
+    reasons: dict[str, str] = field(default_factory=dict)  # os -> why it fell back
 
 
 class Submitter:
@@ -82,12 +84,22 @@ class Submitter:
         self._result = SubmitResult()
         self._idle, self._given_up = [], set()
         self._transport.subscribe(CI_TOPIC, self._on_message)
+        have_team = False
         try:
-            if self._wait_for_team():
+            have_team = self._wait_for_team()
+            if have_team:
                 self._request_until_taken(legs)
         finally:
             self._transport.unsubscribe(CI_TOPIC)
         self._result.unhandled = [leg.os for leg in legs if leg.os not in self._result.handled]
+        for os_name in self._result.unhandled:
+            if not have_team:
+                reason = "no answer from the fleet: no member list was received"
+            elif os_name in self._given_up:
+                reason = "no idle team machine of this OS was online"
+            else:
+                reason = f"no machine took it within {self._wait_s:.0f} s"
+            self._result.reasons[os_name] = reason
         return self._result
 
     def _wait_for_team(self) -> bool:
@@ -159,6 +171,7 @@ class Submitter:
         if valid_node_message(msg, self._team, leg.repo):
             self._result.handled[leg.os] = msg.node_id
             self._result.enc_pubs[leg.os] = msg.proof.enc_pub
+            self._result.names[leg.os] = msg.name
 
     def follow(
         self,

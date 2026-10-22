@@ -36,6 +36,7 @@ class Settings:
     os_name: str
     arch: str
     capacity: int = 1
+    name: str = ""
 
 
 class CiRuntime:
@@ -85,6 +86,7 @@ class CiRuntime:
                 os_name=settings.os_name,
                 arch=settings.arch,
                 capacity=settings.capacity,
+                name=settings.name,
             ),
             clock=self._clock,
         )
