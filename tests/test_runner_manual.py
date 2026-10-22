@@ -63,6 +63,17 @@ def fake_runner(tmp_path, monkeypatch):
         lambda spec, *a, **k: installed.append(spec) or service.ServiceResult(Path("svc")),
     )
     monkeypatch.setattr(cli_manual, "installed_services", installed, raising=False)
+    # Nor the developer's real services (systemctl, launchctl, schtasks).
+    removed = []
+    monkeypatch.setattr(
+        service, "status", lambda *a, name="runner", **k: (any(s.name == name for s in installed), "")
+    )
+    monkeypatch.setattr(
+        service,
+        "uninstall",
+        lambda *a, name="runner", **k: removed.append(name) or service.ServiceResult(Path(name)),
+    )
+    monkeypatch.setattr(cli_manual, "removed_services", removed, raising=False)
     bus = MemoryBus()
     monkeypatch.setattr(
         agent_config, "settings_path", lambda *a: tmp_path / "runner.settings.json"
@@ -482,7 +493,8 @@ def test_run_manual_announces_the_label_and_runs(fake_runner, monkeypatch):
 
 def test_run_manual_needs_a_registered_runner(fake_runner):
     result = cli.invoke(app, ["runner", "run-manual", "acme/other"])
-    assert result.exit_code == 1
+    # 3 is "bad settings": systemd does not start the service again for it (#90).
+    assert result.exit_code == 3
     assert "octopus init acme/other" in result.output
 
 
@@ -535,3 +547,22 @@ def test_the_token_comes_before_the_download(fake_runner, monkeypatch):
     result = init_repo()
     assert result.exit_code == 0, result.output
     assert order == ["token", "download"]
+
+
+def test_unregister_also_removes_the_service(fake_runner, monkeypatch):
+    # Without the runner, the service can only fail, and the OS would start it again (#90).
+    monkeypatch.setattr(cli_manual, "gh_token", lambda kind, target: TOKEN)
+    assert init_repo(args=()).exit_code == 0
+    assert [s.name for s in cli_manual.installed_services] == ["manual-acme__app"]
+    result = cli.invoke(app, ["runner", "unregister-manual", "acme/app"])
+    assert result.exit_code == 0, result.output
+    assert cli_manual.removed_services == ["manual-acme__app"]
+    assert "removed the service" in result.output
+
+
+def test_unregister_with_no_service_removes_nothing(fake_runner, monkeypatch):
+    monkeypatch.setattr(cli_manual, "gh_token", lambda kind, target: TOKEN)
+    assert init_repo().exit_code == 0  # --foreground: no service
+    result = cli.invoke(app, ["runner", "unregister-manual", "acme/app"])
+    assert result.exit_code == 0, result.output
+    assert cli_manual.removed_services == []
