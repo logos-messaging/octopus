@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -194,3 +195,84 @@ class GhStatusPoster:
         )
         if proc.returncode != 0:
             raise RuntimeError(f"could not post the commit status: exit code: {proc.returncode}")
+
+
+class GhRunProbe:
+    """Asks GitHub, with the owner's `gh`, whether the run of a running leg is still wanted.
+
+    The Actions run of a handed-off leg completes (success) as soon as the submit job exits, long
+    before the leg ends, so `completed` means nothing. A run is cancelled when its attempt
+    concludes `cancelled`. A completed run can no longer be cancelled by a newer push, so a pull
+    request leg is also stale when the PR was closed or its head is no longer the one the leg was
+    started for. Push legs are never superseded by a newer commit: each commit gets its own
+    result. Any error, rate limit or doubt answers None: the leg keeps running.
+    """
+
+    def __init__(self, gh: str | None = None, timeout_s: float = 20.0) -> None:
+        self._gh = gh or shutil.which("gh") or "gh"
+        self._timeout_s = timeout_s
+        # A completed attempt never changes, so it is asked about once per leg.
+        self._completed: set[str] = set()
+        self._heads: dict[str, str] = {}
+
+    def stale(self, leg: LegInfo) -> str | None:
+        try:
+            return self._stale(leg)
+        except Exception:
+            log.debug("could not probe the run: %s", leg.leg_id, exc_info=True)
+            return None
+
+    def _stale(self, leg: LegInfo) -> str | None:
+        if leg.leg_id not in self._completed:
+            out = self._api(
+                f"repos/{leg.repo}/actions/runs/{leg.run_id}/attempts/{leg.attempt}",
+                "[.status, .conclusion] | @tsv",
+            )
+            if out is None:
+                return None
+            status, _, conclusion = out.strip().partition("\t")
+            if conclusion == "cancelled":
+                return "the run was cancelled"
+            if status != "completed":
+                return None  # still running: a newer push cancels it if the workflow says so
+            if len(self._completed) >= 1000:
+                self._completed.clear()
+            self._completed.add(leg.leg_id)
+        return self._pull_request_stale(leg) if leg.event == "pull_request" else None
+
+    def _pull_request_stale(self, leg: LegInfo) -> str | None:
+        match = re.fullmatch(r"refs/pull/(\d+)/merge", leg.ref)
+        if match is None:
+            return None
+        head = self._heads.get(leg.leg_id)
+        if head is None:
+            out = self._api(f"repos/{leg.repo}/git/commits/{leg.sha}", ".parents[].sha")
+            parents = (out or "").split()
+            if len(parents) != 2:
+                return None
+            head = parents[1]
+            if len(self._heads) >= 1000:
+                self._heads.clear()
+            self._heads[leg.leg_id] = head
+        out = self._api(f"repos/{leg.repo}/pulls/{match.group(1)}", "[.state, .head.sha] | @tsv")
+        if out is None:
+            return None
+        state, _, current = out.strip().partition("\t")
+        if state == "closed":
+            return "the pull request was closed"
+        if current and current != head:
+            return "the pull request has a newer commit"
+        return None
+
+    def _api(self, path: str, jq: str) -> str | None:
+        try:
+            proc = subprocess.run(
+                [self._gh, "api", path, "--jq", jq],
+                capture_output=True,
+                text=True,
+                timeout=self._timeout_s,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return proc.stdout if proc.returncode == 0 else None
