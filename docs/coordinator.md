@@ -34,6 +34,7 @@ writes the token-mode ones ([github-setup.md](github-setup.md)).
 | `OCTOPUS_PUBLIC_IP` | required: the address runners reach the node at |
 | `OCTOPUS_TCP_PORT` | node port (default 60000); open it in the firewall |
 | `OCTOPUS_ENTRY_NODES` | other coordinators' multiaddrs |
+| `OCTOPUS_LOG_LEVEL` | how much the logos-delivery library logs: `INFO` by default, or `TRACE`, `DEBUG`, `NOTICE`, `WARN`, `ERROR`, `FATAL`, `NONE` (any case). An unknown value is refused at start. Takes effect with a library built with runtime filtering (`lib-latest` from #93 on) |
 | `OCTOPUS_WEBHOOK_LISTEN` | webhook HTTP address, default `127.0.0.1:8080` (or `--listen`); put a TLS proxy in front |
 | `OCTOPUS_WEBHOOK_URL` | the public webhook URL, shown in the output |
 | `OCTOPUS_GITHUB_API_URL` | GitHub Enterprise Server: `https://HOST/api/v3` |

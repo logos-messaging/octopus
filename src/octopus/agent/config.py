@@ -14,6 +14,7 @@ from ..transport.config import (
     NAT_ENV,
     ROOT_KEY_ENV,
     TCP_PORT_ENV,
+    env_log_level,
     runner_config,
 )
 from .trust import default_config_path
@@ -154,6 +155,10 @@ class RunnerConfig:
             port = int(env[TCP_PORT_ENV]) if env.get(TCP_PORT_ENV) else self.tcp_port
         except ValueError as e:
             raise ConfigError(f"invalid {TCP_PORT_ENV}: {env[TCP_PORT_ENV]}") from e
+        try:
+            env_log_level(env)  # read again by node_config(); fail here, before the node
+        except ValueError as e:
+            raise ConfigError(str(e)) from None
         merged = RunnerConfig(
             entry_nodes=list(entry_nodes) or env_nodes or list(self.entry_nodes),
             coordinators=list(coordinators) or list(self.coordinators),

@@ -16,11 +16,13 @@ from pydantic import SecretStr
 from ..crypto.signing import decode_signing_public
 from ..github.app import DEFAULT_API_URL
 from ..transport.config import (
+    DEFAULT_LOG_LEVEL,
     DEFAULT_TCP_PORT,
     ENTRY_NODES_ENV,
     PUBLIC_IP_ENV,
     TCP_PORT_ENV,
     coordinator_config,
+    env_log_level,
 )
 from .picker import PICK_LABEL_PREFIX
 from .webhook_server import DEFAULT_PATH
@@ -106,6 +108,7 @@ class CoordinatorConfig:
     allowed_repos: list[str] = field(default_factory=list)
     allowed_orgs: list[str] = field(default_factory=list)
     public_ip: str = ""
+    log_level: str = DEFAULT_LOG_LEVEL
     tcp_port: int = DEFAULT_TCP_PORT
     entry_nodes: list[str] = field(default_factory=list)
     # coordinator id -> Ed25519 public key of the other coordinators (see PEERS_ENV)
@@ -133,6 +136,10 @@ class CoordinatorConfig:
             tcp_port = int(env.get(TCP_PORT_ENV) or DEFAULT_TCP_PORT)
         except ValueError:
             raise ConfigError(f"invalid {TCP_PORT_ENV}: {env.get(TCP_PORT_ENV)}") from None
+        try:
+            log_level = env_log_level(env)  # env file included, unlike os.environ
+        except ValueError as e:
+            raise ConfigError(str(e)) from None
         token = env.get(TOKEN_ENV, "").strip()
         key_file = env.get(APP_KEY_FILE_ENV, "").strip()
         config = cls(
@@ -147,6 +154,7 @@ class CoordinatorConfig:
             allowed_repos=_list(env.get(REPO_ENV)) + _list(env.get(ALLOWED_REPOS_ENV)),
             allowed_orgs=_list(env.get(ALLOWED_ORGS_ENV)),
             public_ip=env.get(PUBLIC_IP_ENV, "").strip(),
+            log_level=log_level,
             tcp_port=tcp_port,
             entry_nodes=_list(env.get(ENTRY_NODES_ENV)),
             peers=parse_peers(env.get(PEERS_ENV)),
@@ -201,6 +209,7 @@ class CoordinatorConfig:
             tcp_port=self.tcp_port,
             entry_nodes=self.entry_nodes,
             storage_path=storage_path,
+            log_level=self.log_level,
         )
 
 

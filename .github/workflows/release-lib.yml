@@ -41,29 +41,9 @@ jobs:
           ref: ${{ inputs.ref }}
           submodules: true
 
-      # logos-delivery marks its own submodules update=none, so init only this one.
-      - name: Checkout the pinned logos-delivery
-        working-directory: vendor/logos-delivery-python-bindings
-        run: git submodule update --init --checkout vendor/logos-delivery
-
-      - name: Pinned logos-delivery commit
-        id: pin
-        working-directory: vendor/logos-delivery-python-bindings
-        run: echo "sha=$(git rev-parse HEAD:vendor/logos-delivery)" >> "$GITHUB_OUTPUT"
-
-      - name: Restore the built library
-        id: libcache
-        uses: actions/cache@v4
-        with:
-          path: vendor/logos-delivery-python-bindings/vendor/logos-delivery/build/${{ matrix.built }}
-          key: liblogosdelivery-${{ runner.os }}-${{ runner.arch }}-${{ steps.pin.outputs.sha }}
-
-      - name: Build liblogosdelivery
-        if: steps.libcache.outputs.cache-hit != 'true'
-        working-directory: vendor/logos-delivery-python-bindings/vendor/logos-delivery
-        run: |
-          make build-deps
-          make DISABLE_RLN=true liblogosdelivery
+      # The same build as CI and the E2E test (flags, cache), so what is published is what the
+      # needs_lib tests ran against.
+      - uses: ./.github/actions/liblogosdelivery
 
       # The build keeps its debug information: 279 MB on Linux, 68 MB without it. The exported
       # symbols stay.

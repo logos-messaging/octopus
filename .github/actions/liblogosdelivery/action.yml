@@ -1,8 +1,9 @@
 name: liblogosdelivery
 description: >
   Builds liblogosdelivery from the logos-delivery commit that the bindings pin, and puts it
-  where the bindings load it. The build is cached for each commit. The caller must check out
-  this repo with its submodules first.
+  where the bindings load it. The build is cached for each commit and set of build flags. The
+  caller must check out this repo with its submodules first. CI, the E2E test and the release
+  of `lib-latest` all build through this action, so they build the same library.
 
 runs:
   using: composite
@@ -19,6 +20,19 @@ runs:
       working-directory: vendor/logos-delivery-python-bindings
       run: echo "sha=$(git rev-parse HEAD:vendor/logos-delivery)" >> "$GITHUB_OUTPUT"
 
+    # logos-delivery compiles the library with `-d:chronicles_log_level=TRACE`. Without runtime
+    # filtering every TRACE and DEBUG line is written, and the `log-level` that Octopus passes
+    # (OCTOPUS_LOG_LEVEL, default INFO) is ignored (#93). The Makefile adds the flags of the
+    # NIM_PARAMS environment variable to its own; a NIM_PARAMS on the make command line would
+    # replace them. The flags are part of the cache key, so a change rebuilds the library.
+    - name: Build flags
+      id: flags
+      shell: bash
+      run: |
+        params="-d:chronicles_runtime_filtering=on"
+        echo "nim_params=$params" >> "$GITHUB_OUTPUT"
+        echo "key=$(printf '%s' "$params" | git hash-object --stdin | cut -c1-12)" >> "$GITHUB_OUTPUT"
+
     - name: Restore the built library
       id: libcache
       uses: actions/cache@v4
@@ -26,16 +40,18 @@ runs:
         path: |
           vendor/logos-delivery-python-bindings/vendor/logos-delivery/build/liblogosdelivery.so
           vendor/logos-delivery-python-bindings/vendor/logos-delivery/build/liblogosdelivery.dylib
-        key: liblogosdelivery-${{ runner.os }}-${{ runner.arch }}-${{ steps.pin.outputs.sha }}
+        key: liblogosdelivery-${{ runner.os }}-${{ runner.arch }}-${{ steps.pin.outputs.sha }}-${{ steps.flags.outputs.key }}
 
     # Only the long part (Nim, nimble deps, compile) is skipped on a cache hit.
     - name: Build liblogosdelivery
       if: steps.libcache.outputs.cache-hit != 'true'
       shell: bash
       working-directory: vendor/logos-delivery-python-bindings/vendor/logos-delivery
+      env:
+        LIB_NIM_PARAMS: ${{ steps.flags.outputs.nim_params }}
       run: |
         make build-deps
-        make DISABLE_RLN=true liblogosdelivery
+        NIM_PARAMS="$LIB_NIM_PARAMS" make DISABLE_RLN=true liblogosdelivery
 
     - name: Install the library where the bindings load it
       shell: bash
