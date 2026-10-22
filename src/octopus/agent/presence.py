@@ -18,6 +18,8 @@ class RunnerInfo:
     labels: tuple[str, ...] = field(default_factory=tuple)
     capacity: int = 1
     pubkey: str | None = None
+    # A manual runner: the repo (`owner/name`) or org (`owner`) it is registered on.
+    target: str | None = None
 
 
 class PresencePublisher:
@@ -74,5 +76,6 @@ class PresencePublisher:
             sent_at=time.time(),
             offline=offline,
             pubkey=self._info.pubkey,
+            target=self._info.target,
         )
         self._transport.publish(PRESENCE_TOPIC, msg.model_dump_json().encode())

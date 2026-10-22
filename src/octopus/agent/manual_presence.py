@@ -32,9 +32,17 @@ def default_transport_factory(data_dir: Path) -> TransportFactory:
 
 @contextmanager
 def announce(
-    label: str, data_dir: Path, factory: TransportFactory | None = None
+    label: str,
+    data_dir: Path,
+    factory: TransportFactory | None = None,
+    *,
+    target: str | None = None,
 ) -> Iterator[str]:
-    """Publish presence with `label` while the block runs. Yields the runner id."""
+    """Publish presence with `label` while the block runs. Yields the runner id.
+
+    `target` is the repo (`owner/name`) or org (`owner`) the runner is registered on, so that a
+    coordinator in pick mode gives it only jobs of that repo or org.
+    """
     key = load_or_create_private_key(data_dir / KEY_FILE)
     transport = (factory or default_transport_factory(data_dir))()
     transport.start()
@@ -46,6 +54,7 @@ def announce(
             arch=platform.machine().lower(),
             labels=(label,),
             pubkey=encode_public_key(key.public_key()),
+            target=target,
         ),
     )
     publisher.start()

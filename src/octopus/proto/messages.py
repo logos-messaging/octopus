@@ -44,6 +44,8 @@ class Presence(BaseModel):
     offline: bool = False
     # Runner's X25519 public key; `runner_id` is derived from it.
     pubkey: str | None = None
+    # A manual runner: the repo (`owner/name`) or org (`owner`) it is registered on in GitHub.
+    target: str | None = None
 
 
 class JobOffer(BaseModel):

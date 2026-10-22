@@ -158,3 +158,52 @@ def test_concurrent_picks_never_double_assign():
         t.join()
     labels = [p.label for p in got if p is not None]
     assert len(labels) == 5 and len(set(labels)) == 5
+
+
+def _registry_with(*runners):
+    bus = MemoryBus()
+    clock = Clock()
+    registry = Registry(MemoryTransport(bus), clock)
+    registry.start()
+    for runner_id, label, target in runners:
+        info = RunnerInfo(runner_id, "linux", "x64", (label,), target=target)
+        PresencePublisher(MemoryTransport(bus), info).tick()
+    return registry, clock
+
+
+def test_a_runner_takes_only_jobs_of_the_repo_or_org_it_is_registered_on():
+    registry, clock = _registry_with(
+        ("id-a", "octopus-a", "acme/app"), ("id-b", "octopus-b", "acme/other")
+    )
+    picker = Picker(registry, clock, allowed_labels=["octopus-a", "octopus-b"])
+    assert picker.pick("acme/app", "1").label == "octopus-a"
+    assert picker.pick("acme/app", "2") is None  # octopus-b serves acme/other only
+    assert picker.pick("ACME/Other", "3").label == "octopus-b"
+
+
+def test_an_org_runner_takes_jobs_of_every_repo_of_the_org():
+    registry, clock = _registry_with(("id-a", "octopus-a", "acme"))
+    picker = Picker(registry, clock, allowed_labels=["octopus-a"])
+    assert picker.pick("other/app", "1") is None
+    assert picker.pick("acme/app", "2").label == "octopus-a"
+
+
+def test_a_runner_that_names_no_target_can_take_any_allowed_repo():
+    registry, clock = _registry_with(("id-a", "octopus-a", None))
+    picker = Picker(registry, clock, allowed_labels=["octopus-a"])
+    assert picker.pick("acme/app", "1").label == "octopus-a"
+
+
+def test_announce_publishes_the_target(tmp_path):
+    from octopus.agent import manual_presence
+    from octopus.proto import PRESENCE_TOPIC, Presence
+
+    bus = MemoryBus()
+    seen = []
+    MemoryTransport(bus).subscribe(
+        PRESENCE_TOPIC, lambda _t, p: seen.append(Presence.model_validate_json(p))
+    )
+    factory = lambda: MemoryTransport(bus)
+    with manual_presence.announce("octopus-a", tmp_path, factory, target="acme/app"):
+        pass
+    assert seen[0].target == "acme/app" and seen[0].labels == ["octopus-a"]
