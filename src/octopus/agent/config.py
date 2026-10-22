@@ -36,6 +36,30 @@ def coordinator_id(pubkey: str) -> str:
         raise ConfigError(f"could not parse coordinator key: {pubkey}: {e}") from e
 
 
+# max_jobs = 0 means no limit on parallel jobs. Coordinators compare busy with capacity, so an
+# unlimited runner advertises this many slots.
+UNLIMITED_JOBS = 0
+UNLIMITED_CAPACITY = 1024
+
+
+def parse_max_jobs(text: str) -> int:
+    """A number of at least 1, or "unlimited" (stored as 0)."""
+    value = text.strip().lower()
+    if value in ("unlimited", "no limit"):
+        return UNLIMITED_JOBS
+    try:
+        number = int(value)
+    except ValueError as e:
+        raise ConfigError(f"invalid max jobs, expected a number or unlimited: {text}") from e
+    if number < 1:
+        raise ConfigError(f"invalid max jobs, expected at least 1 or unlimited: {text}")
+    return number
+
+
+def format_max_jobs(max_jobs: int) -> str:
+    return "unlimited" if max_jobs == UNLIMITED_JOBS else str(max_jobs)
+
+
 @dataclass
 class RunnerConfig:
     entry_nodes: list[str] = field(default_factory=list)
@@ -48,9 +72,19 @@ class RunnerConfig:
     tcp_port: int = DEFAULT_TCP_PORT
     nat: str | None = None
 
+    @property
+    def capacity(self) -> int:
+        """Job slots to advertise to coordinators."""
+        return UNLIMITED_CAPACITY if self.max_jobs == UNLIMITED_JOBS else self.max_jobs
+
+    def has_free_slot(self, active: int) -> bool:
+        return self.max_jobs == UNLIMITED_JOBS or active < self.max_jobs
+
     def validate(self) -> None:
-        if self.max_jobs < 1:
-            raise ConfigError(f"invalid max_jobs, expected at least 1: {self.max_jobs}")
+        if self.max_jobs < UNLIMITED_JOBS:
+            raise ConfigError(
+                f"invalid max_jobs, expected at least 1 or 0 for unlimited: {self.max_jobs}"
+            )
         if not 0 < self.tcp_port < 65536:
             raise ConfigError(f"invalid tcp_port, expected 1-65535: {self.tcp_port}")
         for pubkey in self.coordinators:
