@@ -23,9 +23,15 @@ on:
         type: string
         default: '["windows"]'
       wait:
-        description: Seconds to wait for a team machine to take each leg.
+        description: Seconds to wait for an idle team machine to take each leg.
         type: number
         default: 45
+      busy-wait:
+        description: >-
+          Seconds to wait for a busy team machine of an OS to be free before that leg goes to a
+          hosted runner. The submit job bills while it waits.
+        type: number
+        default: 240
       team-key:
         description: The team public key. Default is `.octopus/team.pub` of the calling repo.
         type: string
@@ -36,8 +42,10 @@ permissions:
 
 jobs:
   submit:
-    # Short and cheap: it only asks the fleet and reports which legs nobody took.
+    # Cheap (Linux): it only asks the fleet, waits for busy machines and reports what nobody took.
     runs-on: ubuntu-latest
+    # Setup (~2 min) + the longest wait (`busy-wait` 240 s, then `wait` 45 s) fit with margin.
+    timeout-minutes: 15
     permissions:
       id-token: write
       contents: read
@@ -69,6 +77,7 @@ jobs:
           OCTOPUS_REF: ${{ steps.ref.outputs.sha }}
           INPUT_OS: ${{ inputs.os }}
           INPUT_WAIT: ${{ inputs.wait }}
+          INPUT_BUSY_WAIT: ${{ inputs.busy-wait }}
           INPUT_TEAM_KEY: ${{ inputs.team-key }}
         run: |
           test -n "$OCTOPUS_REF"
@@ -79,7 +88,8 @@ jobs:
           for os in $(echo "$INPUT_OS" | python -c 'import json,sys; print(*json.load(sys.stdin))'); do
             args+=(--os "$os")
           done
-          octopus ci submit "${args[@]}" --team-key "$team_key" --wait "$INPUT_WAIT"
+          octopus ci submit "${args[@]}" --team-key "$team_key" --wait "$INPUT_WAIT" \
+            --busy-wait "$INPUT_BUSY_WAIT"
       - id: result
         if: always()
         env:

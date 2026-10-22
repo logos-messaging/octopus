@@ -52,7 +52,7 @@ for a member), and `gh auth setup-git` so the machine can clone with your creden
 
 1. The hosted `submit` job asks GitHub for one OIDC token per OS. The token's audience carries the
    OS and the key replies are sealed to, so GitHub's signature binds them. It sends the tokens
-   to the fleet and waits up to `wait` seconds for a lease on each leg.
+   to the fleet and waits for a lease on each leg (see "Busy machines" below for how long).
 2. Every node of that OS verifies the token (GitHub's public keys, issuer, expiry, one-time `jti`),
    then the repo, event and workflow: only `push`/`pull_request` of an allowed repo, from the
    pinned Octopus workflow. The commit, run and OS come from the token, never from the request.
@@ -66,6 +66,36 @@ for a member), and `gh auth setup-git` so the machine can clone with your creden
    `.octopus/ci.sh`, streams the log, and posts the commit status `octopus/ci (<os>)` with your
    `gh` login. The job environment has no `GITHUB_TOKEN`/`GH_TOKEN`.
 5. Legs nobody leased go to a hosted runner (dynamic matrix); `windows` always does.
+
+## Busy machines: wait or fall back
+
+Nodes announce every 10 s whether they are busy (`busy`, `capacity`). Per OS, the submitter
+tells three cases apart, counting only machines whose login is a member for the leg's repo:
+
+| Heard in the announces | The submitter | If the limit passes, the reason says |
+| --- | --- | --- |
+| No machine of the OS online | gives up after about 25 s | `no team machine of this OS was online` |
+| Machines online, all busy | waits up to `busy-wait` (240 s), repeating the request | `all team machines of this OS were busy for 240 s` |
+| An idle machine | waits up to `wait` (45 s) for its lease | `no machine took it within 45 s` |
+
+`wait` counts from the moment a busy machine became free, so the time spent waiting does not eat
+the wait for its answer. Both are inputs of the reusable workflow (`wait`, `busy-wait`) and
+options of `octopus ci submit` (`--wait`, `--busy-wait`).
+
+A busy node that gets a request does not forget it: the leg is kept in the state `busy`, and
+the node plans it again as soon as it has a free slot, as long as the submitter keeps repeating
+the request (it does every 3 s; the node stops caring after 30 s of silence, so a leg whose
+submitter already went to a hosted runner is not run twice for nothing). The token is not
+verified again (its one-time `jti` allows one verification): the node remembers the digest of each
+token and the verified leg. Waiting legs are planned oldest first, one per free slot, and join the
+ranking of the nodes idle at that moment, so a machine that was busy never jumps ahead of idle
+ones; if another node already claimed the leg, the usual lease rules apply.
+
+Cost trade-off: the hosted `submit` job bills while it waits. A Linux minute costs a fraction of
+a hosted macOS minute, and a machine that is online will usually be free within a few minutes,
+so up to 4 minutes of waiting is cheaper than a hosted macOS leg. Lower `busy-wait` if your legs
+are long, set it to `0` and a busy fleet falls back at once. The job
+has `timeout-minutes: 15`.
 
 ## What uses logos-delivery
 
@@ -141,7 +171,7 @@ commit, ran `.octopus/ci.sh`, and posted `octopus/ci (macos)` pending, then succ
 owner. (`github.job_workflow_sha` is empty in a reusable workflow, so the job reads
 `job_workflow_sha` from its own OIDC token.) There is no Linux node, so that leg fell back to a hosted runner, and Windows ran hosted.
 The submit job took about 2 minutes, most of it waiting for the Linux leg: the submitter now gives
-up on an OS with no idle node online after about 25 s (two announce intervals and a margin, so
+up on an OS with no node online after about 25 s (two announce intervals and a margin, so
 one lost announce does not make a leg run twice).
 
 ## Not verified

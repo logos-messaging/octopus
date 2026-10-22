@@ -39,6 +39,16 @@ class Leg:
     repo: str
 
 
+@dataclass(frozen=True)
+class _Heard:
+    """The last announce of one node: where, whose, idle or busy, and when it was heard."""
+
+    os: str
+    login: str
+    idle: bool
+    seen: float
+
+
 @dataclass
 class SubmitResult:
     handled: dict[str, str] = field(default_factory=dict)  # os -> node id
@@ -58,6 +68,8 @@ class Submitter:
         list_wait_s: float = 10.0,
         repeat_s: float = 3.0,
         discover_s: float = 25.0,
+        busy_wait_s: float = 240.0,
+        online_s: float = 35.0,
         sleep: Callable[[float], None] = time.sleep,
         monotonic: Callable[[], float] = time.monotonic,
         pump: Callable[[], None] | None = None,
@@ -70,8 +82,12 @@ class Submitter:
         # Nodes announce every 10 s: after two announce intervals and a margin, an OS with no
         # idle node online is given up (one lost announce must not make a leg run twice).
         self._discover_s = discover_s
-        self._idle: list[tuple[str, str]] = []  # (os, login) of the idle nodes heard
-        self._given_up: set[str] = set()
+        # A machine that announces busy will be free in minutes, and a hosted macOS minute costs
+        # far more than a minute of this Linux job: wait for it, but for a separate, longer limit.
+        self._busy_wait_s = busy_wait_s
+        self._online_s = online_s  # a busy node not heard for this long is taken for gone
+        self._nodes: dict[str, _Heard] = {}  # node id -> its last announce
+        self._given_up: dict[str, str] = {}  # os -> why it falls back
         self._sleep = sleep
         self._mono = monotonic
         self._pump = pump or (lambda: None)
@@ -82,7 +98,7 @@ class Submitter:
         """Ask the fleet for every leg; the legs nobody takes in time come back as unhandled."""
         self._legs = {leg.leg_id: leg for leg in legs}
         self._result = SubmitResult()
-        self._idle, self._given_up = [], set()
+        self._nodes, self._given_up = {}, {}
         self._transport.subscribe(CI_TOPIC, self._on_message)
         have_team = False
         try:
@@ -95,10 +111,10 @@ class Submitter:
         for os_name in self._result.unhandled:
             if not have_team:
                 reason = "no answer from the fleet: no member list was received"
-            elif os_name in self._given_up:
-                reason = "no idle team machine of this OS was online"
             else:
-                reason = f"no machine took it within {self._wait_s:.0f} s"
+                reason = self._given_up.get(os_name) or (
+                    f"no machine took it within {self._wait_s:.0f} s"
+                )
             self._result.reasons[os_name] = reason
         return self._result
 
@@ -120,25 +136,48 @@ class Submitter:
     def _request_until_taken(self, legs: list[Leg]) -> None:
         start = self._mono()
         last = -1e18
-        while self._waiting(legs) and self._mono() - start < self._wait_s:
-            if self._mono() - start >= self._discover_s:
-                for leg in legs:
-                    if not self._has_idle_node(leg) and leg.os not in self._result.handled:
-                        self._given_up.add(leg.os)
+        busy_seen: dict[str, float] = {}  # os -> when only busy machines of it were last heard
+        while self._waiting(legs):
+            for leg in self._waiting(legs):
+                self._check_limit(leg, start, busy_seen)
             if self._mono() - last >= self._repeat_s:
                 last = self._mono()
                 for leg in self._waiting(legs):
-                    if leg.os not in self._result.handled:
-                        payload = json.dumps({"kind": "request", "token": leg.token})
-                        self._transport.publish(CI_TOPIC, payload.encode())
+                    payload = json.dumps({"kind": "request", "token": leg.token})
+                    self._transport.publish(CI_TOPIC, payload.encode())
             self._pump()
             self._sleep(0.2)
 
-    def _has_idle_node(self, leg: Leg) -> bool:
-        return any(
-            os_name == leg.os and self._team.is_member_login(login, leg.repo)
-            for os_name, login in self._idle
-        )
+    def _check_limit(self, leg: Leg, start: float, busy_seen: dict[str, float]) -> None:
+        """Give a leg up when the limit of what is known about its OS has passed."""
+        now = self._mono()
+        idle, busy = self._machines(leg)
+        if idle:
+            # `wait` counts from the moment a machine that was busy became free: it is about to
+            # claim, and the time spent waiting for it must not use up the wait for its answer.
+            if now - busy_seen.get(leg.os, start) >= self._wait_s:
+                self._given_up[leg.os] = f"no machine took it within {self._wait_s:.0f} s"
+        elif busy:
+            busy_seen[leg.os] = now
+            if now - start >= self._busy_wait_s:
+                self._given_up[leg.os] = (
+                    f"all team machines of this OS were busy for {self._busy_wait_s:.0f} s"
+                )
+        elif now - start >= self._discover_s:
+            self._given_up[leg.os] = "no team machine of this OS was online"
+
+    def _machines(self, leg: Leg) -> tuple[bool, bool]:
+        """(an idle machine, a busy machine) of the leg's OS that is a member for its repo."""
+        now = self._mono()
+        idle = busy = False
+        for heard in self._nodes.values():
+            if heard.os != leg.os or not self._team.is_member_login(heard.login, leg.repo):
+                continue
+            if heard.idle:
+                idle = True
+            elif now - heard.seen <= self._online_s:
+                busy = True
+        return idle, busy
 
     def _waiting(self, legs: list[Leg]) -> list[Leg]:
         return [
@@ -161,9 +200,12 @@ class Submitter:
         except (ValueError, ValidationError):
             return
         if msg.kind == "announce":
-            if msg.busy < msg.capacity and valid_node_message(msg, self._team):
-                self._idle.append((msg.os, msg.proof.login))
-                del self._idle[:-1000]
+            if valid_node_message(msg, self._team):
+                self._nodes[msg.node_id] = _Heard(
+                    msg.os, msg.proof.login, msg.busy < msg.capacity, self._mono()
+                )
+                if len(self._nodes) > 1000:
+                    del self._nodes[next(iter(self._nodes))]
             return
         leg = self._legs.get(msg.leg_id)
         if leg is None or leg.os in self._result.handled:

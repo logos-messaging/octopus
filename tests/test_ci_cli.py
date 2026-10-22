@@ -3,6 +3,7 @@ import json
 import struct
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -355,6 +356,49 @@ def test_submit_falls_back_and_exits_at_once_when_the_fleet_is_unreachable(tmp_p
     written = dict(line.split("=", 1) for line in out.read_text().splitlines())
     assert json.loads(written["unhandled"]) == ["linux"]
     assert exits == [True]  # no waiting for the node to stop: the spike measured ~23 s
+
+
+def test_submit_passes_the_wait_limits_to_the_submitter(tmp_path, monkeypatch):
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "out"))
+    monkeypatch.setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "https://example.invalid/?x=1")
+    monkeypatch.setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "t")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "acme/app")
+    monkeypatch.setattr(cli_ci, "_mint_token", lambda url, tok, aud: "token-for-" + aud)
+    monkeypatch.setattr(cli_ci, "_exit_now", lambda: None)
+    seen = {}
+
+    class Up:
+        def __init__(self, cfg):
+            pass
+
+        def start(self):
+            pass
+
+    class Quick:
+        def __init__(self, transport, team, **kw):
+            seen.update(kw)
+
+        def submit(self, legs):
+            from octopus.ci.submit import SubmitResult
+
+            return SubmitResult(unhandled=[leg.os for leg in legs])
+
+    monkeypatch.setattr("octopus.transport.logos.LogosTransport", Up)
+    monkeypatch.setattr("octopus.ci.submit.Submitter", Quick)
+    args = ["ci", "submit", "--os", "macos", "--team-key", "A" * 43]
+    assert cli.invoke(app, args).exit_code == 0
+    assert seen == {"wait_s": 45.0, "busy_wait_s": 240.0}
+    assert cli.invoke(app, [*args, "--wait", "30", "--busy-wait", "120"]).exit_code == 0
+    assert seen == {"wait_s": 30.0, "busy_wait_s": 120.0}
+
+
+def test_the_reusable_workflow_passes_busy_wait_to_submit():
+    path = Path(__file__).parent.parent / ".github/workflows/octopus-ci.yml"
+    text = path.read_text()
+    assert "      busy-wait:\n" in text and "        default: 240\n" in text
+    assert "INPUT_BUSY_WAIT: ${{ inputs.busy-wait }}" in text
+    assert '--busy-wait "$INPUT_BUSY_WAIT"' in text
+    assert "    timeout-minutes: 15\n" in text  # room for setup, busy-wait and wait
 
 
 def test_ci_status_runs_on_an_empty_home(tmp_path):

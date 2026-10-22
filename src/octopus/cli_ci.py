@@ -31,7 +31,12 @@ TeamKeyOpt = typer.Option(
     "", "--team-key", envvar="OCTOPUS_TEAM_KEY", help="The team's public key."
 )
 EntryNodeOpt = typer.Option([], "--entry-node", help="Extra entry node multiaddr.")
-WaitOpt = typer.Option(45.0, "--wait", help="Seconds to wait for each leg to be taken.")
+WaitOpt = typer.Option(
+    45.0, "--wait", help="Seconds to wait for an idle machine to take each leg."
+)
+BusyWaitOpt = typer.Option(
+    240.0, "--busy-wait", help="Seconds to wait for a busy machine of an OS to be free."
+)
 FollowOpt = typer.Option(False, "--follow", help="Print the logs of the legs taken.")
 OrgOpt = typer.Option([], "--org", help="Add the members of this organization.")
 RepoOpt = typer.Option([], "--repo", help="Add this repo's collaborators with write access.")
@@ -162,6 +167,7 @@ def ci_submit(
     team_key: str = TeamKeyOpt,
     entry_node: list[str] = EntryNodeOpt,
     wait: float = WaitOpt,
+    busy_wait: float = BusyWaitOpt,
     follow: bool = FollowOpt,
 ) -> None:
     """Ask the fleet to run the legs of this workflow run; print what falls back to GitHub.
@@ -209,7 +215,12 @@ def ci_submit(
             {**runner_config(entry_nodes=entry_node), "mode": "Edge"}
         )
         transport.start()
-        submitter = Submitter(transport, TeamState(decode_signing_public(team_key)), wait_s=wait)
+        submitter = Submitter(
+            transport,
+            TeamState(decode_signing_public(team_key)),
+            wait_s=wait,
+            busy_wait_s=busy_wait,
+        )
         result = submitter.submit(legs)
         if follow and result.handled:
             submitter.follow(
