@@ -10,6 +10,23 @@ coordinator, no scheduling, no encrypted offer and no Octopus trust policy. Any 
 target whose `runs-on` matches the runner's labels runs on this machine. Register it only on
 repos you trust, and read [threat-model.md](threat-model.md) first.
 
+## One command
+
+```bash
+octopus init acme/app
+```
+
+No questions. Octopus gets the one-hour registration token from your `gh` login (it needs admin
+rights on the target; nothing is pasted or stored), registers the runner, and installs a
+background service (launchd, systemd --user or Task Scheduler) that runs it at login. The service
+runs `octopus runner run-manual acme/app`, which starts the GitHub runner **and announces its
+unique label over logos-delivery**, so a coordinator in [pick mode](oidc-pick.md) can offer it.
+Not an admin? Ask one to run `octopus invite acme/app`. It prints a line to send you privately:
+`OCTOPUS_REGISTRATION_TOKEN=<token> octopus init acme/app` (the token lasts one hour and only lets you
+register a runner). Without `gh`, the token is asked for at a hidden prompt. `--foreground` runs it in the terminal
+instead of as a service. `octopus runner unregister-manual acme/app` removes the runner (the
+service is not removed yet: uninstall it with the OS tools).
+
 ## Register and run
 
 ```bash
@@ -33,7 +50,7 @@ it first (below).
 lives in `<data dir>/manual-runner/<owner>__<repo>/` (`--data-dir` picks another data dir).
 
 The unique label `octopus-<name>` (the runner name, prefixed when needed) is also added, and saved in the runner tree.
-With `--announce` the runner publishes it in presence for a coordinator in OIDC pick mode: see
+The wizard also offers to publish it in presence for a coordinator in OIDC pick mode: see
 [oidc-pick.md](oidc-pick.md).
 
 A workflow uses it with `runs-on: [self-hosted, octopus]` (add the OS label, such as `macOS`, to

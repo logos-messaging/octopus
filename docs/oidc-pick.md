@@ -33,15 +33,17 @@ repo's webhook settings, send `workflow_job` events to the webhook URL.
 ## Runner
 
 ```bash
-octopus init --role manual --announce
+octopus init --role manual
 ```
 
-It registers the runner with the labels `octopus`, `octopus-<name>` (the runner name, prefixed
-with `octopus-` when it is not already) and any extras, saves the label, and while the runner
-runs it **announces the label in presence** so the coordinator knows it is online. Set the
-entry node of the coordinator first (`octopus runner setup --entry-node ...`). Use a separate
-`--data-dir` if the machine also runs the coordinator-flow runner (same node key and cache).
-Without `--announce` the runner still registers and runs, but is never picked.
+It asks, step by step: the repo, a runner name, the registration token (hidden), and "Let a
+coordinator in OIDC pick mode offer this runner?" (default yes). On yes it can take the coordinator's multiaddr
+(the `multiaddr` line of `octopus coordinator status`; empty means the shared logos fleet; a wrong format is refused at
+once) and moves this runner's node to a free port if the default is taken. It then prints the
+label to use in `runs-on` and runs the runner, **announcing its unique `octopus-<name>` label in
+presence** while it runs. Run `octopus init --role manual` again to start it later: no token is asked.
+Use a separate `--data-dir` if the machine also runs the coordinator-flow runner (same node key
+and cache). Answer no and the runner still works, but is never picked.
 
 ## Workflow
 

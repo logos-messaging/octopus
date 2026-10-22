@@ -6,11 +6,12 @@ from pathlib import Path
 import typer
 
 from . import __version__
+from .cli_ci import add_ci
 from .cli_github import github_app
 from .cli_init import add_init
 from .cli_keys import add_coordinator_keygen, root_app
 from .cli_lib import lib_app
-from .cli_manual import add_manual
+from .cli_manual import add_invite, add_manual
 
 app = typer.Typer(no_args_is_help=True, help="Octopus: lend your laptop as a CI runner.")
 runner_app = typer.Typer(no_args_is_help=True, help="Commands for runner hosts.")
@@ -23,6 +24,8 @@ app.add_typer(lib_app, name="lib")
 add_coordinator_keygen(coordinator_app)
 add_init(app)
 add_manual(runner_app)
+add_invite(app)
+add_ci(app)
 
 
 @app.command()
@@ -527,7 +530,7 @@ def _print_coordinator(state: dict) -> None:
     typer.echo(f"public key      {state['public_key']}")
     typer.echo(f"                runners: octopus runner setup --coordinator {state['public_key']}")
     for addr in state.get("multiaddrs") or []:
-        typer.echo(f"entry node      {addr}")
+        typer.echo(f"multiaddr       {addr}")
     if state.get("cluster_key"):
         peers = ", ".join(state.get("peers") or []) or "none configured"
         typer.echo(f"cluster key     {state['cluster_key']}")
