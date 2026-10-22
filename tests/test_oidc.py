@@ -123,3 +123,24 @@ def test_unfetchable_keys(clock, issuer):
     verifier = OidcVerifier(AUDIENCE, fetch=boom, clock=clock)
     with pytest.raises(OidcError, match="could not fetch"):
         verifier.verify(issuer.token())
+
+
+def test_audience_prefix_accepts_any_audience_with_it_and_returns_it(verifier, issuer):
+    claims = verifier.verify(
+        issuer.token(aud="octopus-ci/KEY/linux", sha="abc"), audience_prefix="octopus-ci/"
+    )
+    assert claims.aud == "octopus-ci/KEY/linux" and claims.sha == "abc"
+
+
+def test_audience_prefix_rejects_other_audiences_and_keeps_the_other_checks(verifier, issuer):
+    with pytest.raises(OidcError, match="audience"):
+        verifier.verify(issuer.token(aud="https://other"), audience_prefix="octopus-ci/")
+    with pytest.raises(OidcError, match="invalid"):
+        forged = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        verifier.verify(
+            issuer.token(key=forged, aud="octopus-ci/K/linux"), audience_prefix="octopus-ci/"
+        )
+    token = issuer.token(aud="octopus-ci/K/linux", jti="once")
+    verifier.verify(token, audience_prefix="octopus-ci/")
+    with pytest.raises(OidcError, match="already used"):
+        verifier.verify(token, audience_prefix="octopus-ci/")
