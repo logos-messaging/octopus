@@ -77,6 +77,12 @@ def authorized_line(key: Ed25519PrivateKey) -> str:
     return "ssh-ed25519 " + base64.b64encode(s(b"ssh-ed25519") + s(raw)).decode() + " me"
 
 
+@pytest.fixture(autouse=True)
+def no_container_runtime(monkeypatch):
+    """The wizard offers the sandbox when Podman or Docker is installed: not on test machines."""
+    monkeypatch.setattr("octopus.ci.wizard.find_runtime", lambda: None)
+
+
 @pytest.fixture
 def machine(tmp_path, monkeypatch):
     """A home directory, an SSH key as ssh-keygen would use, and a fake gh."""
@@ -431,3 +437,77 @@ def test_the_node_id_in_the_proof_matches_the_runtime_identity(machine):
     enc, _sign = home.identity()
     assert home.proof().node_id == node_id(enc.public_key())
     assert NODE_PROOF_NAMESPACE.startswith("octopus-node")
+
+
+# the sandbox offer of the wizard
+
+
+@pytest.fixture
+def linux_with_podman(monkeypatch):
+    monkeypatch.setattr("octopus.ci.sandbox.sys.platform", "linux")
+    monkeypatch.setattr("octopus.ci.wizard.find_runtime", lambda: "podman")
+    pulled = []
+
+    def fake_enable(home, sandbox, *, pull=True, run=None, which=None, say=lambda _t: None):
+        pulled.append(sandbox)
+        home.save_sandbox(sandbox)
+        return [w for w in (sandbox.network_warning(), sandbox.pin_hint()) if w]
+
+    monkeypatch.setattr("octopus.ci.wizard.enable", fake_enable)
+    return pulled
+
+
+def test_the_wizard_offers_the_sandbox_and_enables_it(machine, linux_with_podman):
+    tmp_path, key_file, *_ = machine
+    digest = "b" * 64
+    # team key, members; then: sandbox? image, allow?
+    answers = f"y\ny\ny\npython:3.12-slim@sha256:{digest}\ny\n"
+    result = run_init(tmp_path, key_file, answers=answers, yes=False)
+    assert result.exit_code == 0, result.output
+    home = Home(tmp_path / "data" / "ci")
+    assert home.sandbox() is not None and home.sandbox().runtime == "podman"
+    assert linux_with_podman[0].image == f"python:3.12-slim@sha256:{digest}"
+    assert "run in a container" in result.output or "container (python:3.12-slim" in result.output
+    assert "can read your GitHub login" not in result.output, "the sandbox notice replaces it"
+    assert home.allow().repos == ["acme/app"]
+
+
+def test_declining_the_sandbox_keeps_the_warning_and_runs_as_the_owner(machine, linux_with_podman):
+    tmp_path, key_file, *_ = machine
+    result = run_init(tmp_path, key_file, answers="y\ny\nn\ny\n", yes=False)
+    assert result.exit_code == 0, result.output
+    assert Home(tmp_path / "data" / "ci").sandbox() is None and not linux_with_podman
+    assert "can read your GitHub login" in result.output
+
+
+def test_yes_does_not_enable_the_sandbox_because_there_is_no_image(machine, linux_with_podman):
+    tmp_path, key_file, *_ = machine
+    result = run_init(tmp_path, key_file, answers="y\ny\n")
+    assert result.exit_code == 0, result.output
+    assert Home(tmp_path / "data" / "ci").sandbox() is None and not linux_with_podman
+    assert "octopus ci sandbox enable" in result.output
+
+
+def test_a_sandbox_that_cannot_be_enabled_stops_the_wizard(machine, linux_with_podman, monkeypatch):
+    from octopus.ci.sandbox_setup import SandboxSetupError
+
+    tmp_path, key_file, *_ = machine
+
+    def refuse(*_a, **_k):
+        raise SandboxSetupError("could not pull the image: exit code: 1", 4)
+
+    monkeypatch.setattr("octopus.ci.wizard.enable", refuse)
+    result = run_init(tmp_path, key_file, answers="y\ny\ny\npython:3.12-slim\ny\n", yes=False)
+    assert result.exit_code == 1 and "could not pull the image" in result.output
+    assert Home(tmp_path / "data" / "ci").allow().repos == [], "nothing is allowed unsandboxed"
+
+
+def test_an_existing_sandbox_is_kept_and_not_asked_again(machine, linux_with_podman):
+    from octopus.ci.sandbox import Sandbox
+
+    tmp_path, key_file, *_ = machine
+    Home(tmp_path / "data" / "ci").save_sandbox(Sandbox(image="python:3.12-slim", runtime="podman"))
+    result = run_init(tmp_path, key_file, answers="y\ny\ny\n", yes=False)
+    assert result.exit_code == 0, result.output
+    assert not linux_with_podman, "no second prompt"
+    assert "jobs run in python:3.12-slim" in result.output

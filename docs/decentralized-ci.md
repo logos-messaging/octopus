@@ -143,6 +143,13 @@ octopus ci sandbox enable --image <image>@sha256:<digest>   # then restart the n
 octopus ci sandbox status | disable
 ```
 
+`octopus ci init` offers it: on Linux, when Podman or Docker is installed, it asks "Run jobs in a
+container?" and which image, turns the sandbox on, and replaces the "jobs run as you" warning by a
+short note on what the container can still reach. With `--yes` it asks nothing and enables
+nothing (there is no image to choose for you): it prints the command. Without a runtime, or on
+macOS, nothing changes: the warning stays. Later, making it the default for Linux nodes is the
+plan, once it has run on a real Docker or Podman.
+
 The node stays trusted: it clones the commit with the owner's git credentials and posts the
 commit status. The script runs in a throwaway container (`docker` or `podman`, `--runtime`) that
 sees **only the checkout**, mounted at `/work`:

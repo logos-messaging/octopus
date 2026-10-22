@@ -385,7 +385,9 @@ def sandbox_enable(
         ..., "--image", help="Container image with the toolchain your jobs need, pinned by digest "
         "(e.g. python:3.12-slim@sha256:...). Your choice, never the repo's.",
     ),
-    runtime: str = typer.Option("docker", "--runtime", help="docker or podman."),
+    runtime: str | None = typer.Option(
+        None, "--runtime", help="podman or docker (default: podman if installed, else docker)."
+    ),
     network: str = typer.Option("bridge", "--network", help="Container network; none cuts it off."),
     memory: str = typer.Option("4g", "--memory", help="Memory limit, e.g. 4g."),
     cpus: str = typer.Option("2", "--cpus", help="CPU limit, e.g. 2."),
@@ -393,33 +395,20 @@ def sandbox_enable(
     data_dir: Path | None = DataDirOpt,
 ) -> None:
     """Run every job in a container that sees only its checkout. Restart the node afterwards."""
-    import shutil
-    import subprocess
-
     from .ci.sandbox import Sandbox, SandboxError
+    from .ci.sandbox_setup import SandboxSetupError, enable, find_runtime
 
-    why = Sandbox.supported()
-    if why is not None:
-        raise _fail(why, 3)
     try:
-        sandbox = Sandbox(image=image, runtime=runtime, network=network, memory=memory, cpus=cpus)
+        sandbox = Sandbox(image=image, runtime=runtime or find_runtime() or "docker", network=network, memory=memory, cpus=cpus)
     except SandboxError as e:
         raise _fail(str(e), 2) from e
-    if shutil.which(sandbox.runtime) is None:
-        raise _fail(f"{sandbox.runtime} is not installed or not on the PATH", 3)
-    if pull:
-        typer.echo(f"pulling {sandbox.image} ...")
-        try:
-            done = subprocess.run(sandbox.pull_argv(), check=False, timeout=1800)
-        except (OSError, subprocess.SubprocessError) as e:
-            raise _fail(f"could not pull the image: {e}", 4) from e
-        if done.returncode != 0:
-            raise _fail(f"could not pull the image: exit code: {done.returncode}", 4)
-    _home(data_dir).save_sandbox(sandbox)
+    try:
+        warnings = enable(_home(data_dir), sandbox, pull=pull, say=typer.echo)
+    except SandboxSetupError as e:
+        raise _fail(str(e), e.code) from e
     typer.echo(f"jobs now run in {sandbox.image} ({sandbox.runtime}, network {sandbox.network})")
-    for warning in (sandbox.network_warning(), sandbox.group_warning(), sandbox.pin_hint()):
-        if warning:
-            typer.echo(f"warning: {warning}", err=True)
+    for warning in warnings:
+        typer.echo(f"warning: {warning}", err=True)
     typer.echo("restart the node for it to take effect: octopus runner install-service")
 
 
