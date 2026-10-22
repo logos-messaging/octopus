@@ -273,7 +273,7 @@ def init_manual_runner(
         typer.echo(f"next: octopus runner unregister-manual {target.name} removes it")
         return checks
     try:
-        code = run_manual(directory, base, announce)
+        code = run_manual(directory, base, announce, target)
     except manual.ManualRunnerError as e:
         return [*checks, _show(Check("runner", Status.FAIL, str(e)))]
     status = Status.OK if code == 0 else Status.FAIL

@@ -333,6 +333,7 @@ def test_announce_asks_for_the_entry_node_and_publishes_the_label(
     assert "runs-on: [self-hosted, octopus-lap]" in result.output
     assert "announcing label octopus-lap" in result.output
     assert seen[0].labels == ["octopus-lap"] and not seen[0].offline
+    assert seen[0].target == "acme/app"  # the coordinator picks it only for jobs of acme/app
     assert seen[-1].offline
     saved = json.loads((tmp_path / "runner.settings.json").read_text())
     assert saved["entry_nodes"] == [ENTRY]
@@ -466,14 +467,14 @@ def test_run_manual_announces_the_label_and_runs(fake_runner, monkeypatch):
     seen = []
     real = manual_presence.announce
 
-    def spy(label, base):
-        seen.append(label)
-        return real(label, base)
+    def spy(label, base, *, target=None):
+        seen.append((label, target))
+        return real(label, base, target=target)
 
     monkeypatch.setattr(manual_presence, "announce", spy)
     result = cli.invoke(app, ["runner", "run-manual", "acme/app"])
     assert result.exit_code == 0, result.output
-    assert seen == [manual.unique_label(manual.default_name())]
+    assert seen == [(manual.unique_label(manual.default_name()), "acme/app")]
     assert "announcing label" in result.output
     assert (runner_tree(fake_runner) / "run.marker").exists()
 
