@@ -2,6 +2,7 @@ import base64
 import json
 import struct
 import subprocess
+import sys
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -103,7 +104,8 @@ def run_init(tmp_path, key_file, *args, answers=""):
 def test_team_key_file_round_trip_and_wrong_passphrase(tmp_path):
     key = generate_signing_key()
     save_team_key(key, tmp_path / "team.key", "secret")
-    assert (tmp_path / "team.key").stat().st_mode & 0o077 == 0
+    if sys.platform != "win32":  # Windows has no POSIX modes
+        assert (tmp_path / "team.key").stat().st_mode & 0o077 == 0
     assert load_team_key(tmp_path / "team.key", "secret").public_key() is not None
     with pytest.raises(KeyFileError, match="passphrase"):
         load_team_key(tmp_path / "team.key", "wrong")

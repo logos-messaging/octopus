@@ -132,6 +132,7 @@ def leg_info(repo_path, sha, os_name="linux"):
     )
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="CI nodes run on Linux and macOS only")
 def test_git_executor_checks_out_the_commit_and_runs_the_script(repo, tmp_path):
     src, sha = repo
     lines = []
@@ -148,6 +149,7 @@ def test_git_executor_without_a_script_or_commit(repo, tmp_path):
     assert ex.run(leg_info(str(src), "0" * 40), lambda _l: None, lambda: False).exit_code != 0
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="CI nodes run on Linux and macOS only")
 def test_git_executor_stops_a_running_script(tmp_path):
     src = tmp_path / "o"
     src.mkdir()
@@ -172,6 +174,7 @@ def test_git_executor_stops_a_running_script(tmp_path):
     assert result.exit_code == 143 and result.detail == "stopped"
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="CI nodes run on Linux and macOS only")
 def test_job_environment_has_no_github_token(repo, tmp_path, monkeypatch):
     monkeypatch.setenv("GH_TOKEN", "SECRET-TOKEN")
     src, sha = repo
