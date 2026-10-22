@@ -175,7 +175,6 @@ def test_git_executor_stops_a_running_script(tmp_path):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="CI nodes run on Linux and macOS only")
-@pytest.mark.skipif(sys.platform == "win32", reason="CI nodes run on Linux and macOS only")
 def test_job_environment_has_no_ssh_agent(repo, tmp_path, monkeypatch):
     monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/agent.sock")
     src, _ = repo
@@ -191,6 +190,7 @@ def test_job_environment_has_no_ssh_agent(repo, tmp_path, monkeypatch):
     assert "agent=none" in lines
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="CI nodes run on Linux and macOS only")
 def test_job_environment_has_no_github_token(repo, tmp_path, monkeypatch):
     monkeypatch.setenv("GH_TOKEN", "SECRET-TOKEN")
     src, sha = repo
