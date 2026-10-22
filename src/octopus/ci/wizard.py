@@ -60,6 +60,7 @@ def init_ci(
     install: Install | None = None,
     show: Callable[[Check], Check] = lambda c: c,
     start_service: bool = True,
+    assume_yes: bool = False,
 ) -> list[Check]:
     checks: list[Check] = []
 
@@ -91,6 +92,8 @@ def init_ci(
         add(_sync_team(home, gh, target, now))
     add(_prove(home, gh, now, ssh_key, login))
     if checks[-1].failed:
+        return checks
+    if add(_job_access_notice(name, assume_yes)).failed:
         return checks
     allow = home.allow()
     entry = target.name
@@ -196,6 +199,25 @@ def _prove(home: Home, gh: Gh, now: float, ssh_key: Path | None, login: str | No
         return Check("membership proof", Status.FAIL, str(e))
     home.save_proof(proof)
     return Check("membership proof", Status.CHANGED, f"{who}, valid for 30 days")
+
+
+JOB_ACCESS_NOTICE = (
+    "A CI job runs on this machine as you, in a fresh directory but not in a sandbox.\n"
+    "A job from any branch of {name} can read your GitHub login (the gh token or the keychain),\n"
+    "your SSH keys and agent, and everything else your user can read. Only serve repos whose\n"
+    "writers you would trust with your account. Running jobs as a separate OS user or in a\n"
+    "container is not built yet."
+)
+
+
+def _job_access_notice(name: str, assume_yes: bool) -> Check:
+    """Say what a job can reach, and make the owner agree before the repo is allowed."""
+    typer.echo(JOB_ACCESS_NOTICE.format(name=name))
+    if assume_yes:
+        return Check("job access", Status.OK, "acknowledged with --yes")
+    if not typer.confirm(f"Allow jobs of {name} to run on this machine, as you?", default=False):
+        return Check("job access", Status.FAIL, "not allowed: nothing was changed from here")
+    return Check("job access", Status.OK, "acknowledged")
 
 
 def _install(install: Install, data_dir: Path) -> Check:

@@ -15,8 +15,17 @@ from pathlib import Path
 from .engine import ExecResult, LegInfo
 
 SCRIPT = ".octopus/ci.sh"
-# Never handed to a job: the owner's GitHub credentials.
-_SECRET_ENV = ("GITHUB_TOKEN", "GH_TOKEN", "GH_ENTERPRISE_TOKEN", "OCTOPUS_TEAM_PASSPHRASE")
+# Never handed to a job: the owner's GitHub credentials and SSH agent. This hides them from the
+# environment only: a job runs as the owner and can still read the `gh` config, the keychain
+# and the SSH keys (see docs/decentralized-ci.md).
+_SECRET_ENV = (
+    "GITHUB_TOKEN",
+    "GH_TOKEN",
+    "GH_ENTERPRISE_TOKEN",
+    "OCTOPUS_TEAM_PASSPHRASE",
+    "SSH_AUTH_SOCK",
+    "SSH_AGENT_PID",
+)
 STATUS_CONTEXT = "octopus/ci"
 MAX_DESCRIPTION = 140
 
