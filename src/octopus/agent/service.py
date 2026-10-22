@@ -89,14 +89,20 @@ def runner_spec(
 def manual_spec(target_name: str, slug: str, data_dir: Path) -> ServiceSpec:
     """The service of a manual runner: it runs the GitHub runner and announces it over logos."""
     argv = [sys.executable, "-m", "octopus", "runner", "run-manual", target_name]
-    env = {"OCTOPUS_DATA_DIR": str(data_dir.expanduser().resolve())}
+    env = {"OCTOPUS_DATA_DIR": str(data_dir.expanduser().resolve()), **_path_env()}
     return ServiceSpec(argv=tuple(argv), env=env, workdir=env["OCTOPUS_DATA_DIR"], name=f"manual-{slug}")
+
+
+def _path_env() -> dict[str, str]:
+    """A service starts with a minimal PATH (no Homebrew), but jobs need git, gh and the user's tools."""
+    path = os.environ.get("PATH", "")
+    return {"PATH": path} if path else {}
 
 
 def ci_spec(data_dir: Path) -> ServiceSpec:
     """The service of a CI node: one per machine, it serves every repo allowed in its home."""
     argv = [sys.executable, "-m", "octopus", "ci", "node"]
-    env = {"OCTOPUS_DATA_DIR": str(data_dir.expanduser().resolve())}
+    env = {"OCTOPUS_DATA_DIR": str(data_dir.expanduser().resolve()), **_path_env()}
     return ServiceSpec(argv=tuple(argv), env=env, workdir=env["OCTOPUS_DATA_DIR"], name="ci")
 
 

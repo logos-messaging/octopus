@@ -128,8 +128,8 @@ class GitExecutor:
 class GhStatusPoster:
     """Commit statuses with the machine owner's `gh` login (write access is enough)."""
 
-    def __init__(self, gh: str = "gh") -> None:
-        self._gh = gh
+    def __init__(self, gh: str | None = None) -> None:
+        self._gh = gh or shutil.which("gh") or "gh"
 
     def post(self, leg: LegInfo, state: str, description: str) -> None:
         proc = subprocess.run(
