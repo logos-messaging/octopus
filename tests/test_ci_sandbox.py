@@ -22,6 +22,7 @@ def argv_of(**kw):
     return sandbox.run_argv("octopus-abc", "/data/work/abc", ".octopus/ci.sh", {"CI": "true"})
 
 
+@posix_only
 def test_the_job_gets_only_its_checkout_and_no_privileges():
     argv = argv_of()
     assert argv[:3] == ["docker", "run", "--rm"]
@@ -34,12 +35,14 @@ def test_the_job_gets_only_its_checkout_and_no_privileges():
     assert "--privileged" not in argv and "--pid" not in argv and "--network=host" not in argv
 
 
+@posix_only
 def test_the_job_environment_is_only_what_it_is_told():
     argv = argv_of()
     env = [argv[i + 1] for i, a in enumerate(argv) if a == "-e"]
     assert sorted(env) == ["CI=true", "HOME=/tmp"]
 
 
+@posix_only
 def test_network_and_limits_are_configurable():
     argv = argv_of(network="none", memory="512m", cpus="1", pids=64)
     assert argv[argv.index("--network") + 1] == "none"
