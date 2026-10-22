@@ -1,4 +1,5 @@
 import json
+from itertools import pairwise
 
 import pytest
 from _ci_harness import PIN, REPO, SHA, World
@@ -291,6 +292,131 @@ def test_a_duplicate_run_is_stopped_by_the_better_lease(world):
     assert [s for _, s in loser.status.posts] == ["pending"]  # no final status from the loser
     winner.held.pop()()
     assert [s for _, s in winner.status.posts] == ["pending", "success"]
+
+
+# legs whose run was cancelled or superseded
+
+
+def start_held_leg(world, machine, **request):
+    """A leg that runs on `machine` and stays in progress (its run is in `machine.held`)."""
+    leg_id, payload, reply_key = world.request(**request)
+    world.publish(payload)
+    world.advance(3)
+    assert machine.node.leg_state(leg_id) == "running" and len(machine.held) == 1
+    return leg_id, reply_key
+
+
+def test_a_cancelled_run_stops_the_leg_and_frees_the_machine(world):
+    a = world.add("alice", hold=True)
+    world.settle()
+    leg_id, _ = start_held_leg(world, a)
+    assert a.node.busy() == 1
+    a.probe.reasons[leg_id] = "the run was cancelled"
+    world.advance(10)
+    assert a.node.leg_state(leg_id) == "closed" and a.node.busy() == 0
+    assert a.node._peers[a.node_id].msg.busy == 0, "the machine announced itself idle"
+    a.held.pop()()  # the executor returns after being told to stop
+    assert a.executor.stop_seen == [True]
+    assert [s for _, s in a.status.posts] == ["pending"], "no final status of a cancelled run"
+    assert a.node.leg_state(leg_id) == "closed"
+
+
+def test_a_stopped_leg_is_announced_done_so_that_nobody_takes_it_over(world):
+    a = world.add("alice", hold=True)
+    b = world.add("bob", hold=True)
+    world.settle()
+    heard = spy_on(world)
+    leg_id, payload, _ = world.request()
+    world.publish(payload)
+    world.advance(5)
+    owner = a if a.held else b
+    other = b if owner is a else a
+    owner.probe.reasons[leg_id] = "the run was cancelled"
+    world.advance(10)
+    done = [json.loads(p) for p in heard if b'"done"' in p]
+    assert [(d["node_id"], d["state"]) for d in done] == [(owner.node_id, "cancelled")]
+    assert other.node.leg_state(leg_id) == "closed"
+    owner.frozen = True
+    world.advance(60)  # past the lease timeout: still nobody runs it again
+    assert not other.held
+
+
+def test_the_machine_takes_the_next_leg_after_stopping_a_stale_one(world):
+    a = world.add("alice", hold=True)
+    world.settle()
+    first, _ = start_held_leg(world, a, run_id="1")
+    _, payload, _ = world.request(run_id="2")
+    world.publish(payload)
+    world.advance(5)
+    assert len(a.held) == 1, "busy with the first: the second waits for another node"
+    a.probe.reasons[first] = "the run was cancelled"
+    world.advance(10)
+    assert a.node.busy() == 0
+    _, payload, _ = world.request(run_id="3")
+    world.publish(payload)
+    world.advance(5)
+    assert len(a.held) == 2 and a.node.busy() == 1
+
+
+def test_a_cancelled_run_is_told_to_the_submitter_without_a_status(world):
+    a = world.add("alice", hold=True)
+    world.settle()
+    leg_id, payload, reply_key = world.request()
+    got: list[dict] = []
+    chan = channel_id(leg_id, a.node_id)
+    cipher = PairCipher(derive_channel_key(reply_key, a.enc.public_key(), chan))
+    sub = a.transport.__class__(world.bus)
+    sub.open_channel(
+        chan, leg_topic(leg_id), "submitter", cipher, lambda _s, p: got.append(json.loads(p))
+    )
+    world.publish(payload)
+    world.advance(3)
+    a.probe.reasons[leg_id] = "the run was cancelled"
+    world.advance(10)
+    a.held.pop()()
+    assert got[-1]["t"] == "result" and got[-1]["state"] == "cancelled"
+    assert a.status.posts == [(leg_id, "pending")]
+
+
+@pytest.mark.parametrize("how", ["unknown", "raises"])
+def test_an_unknown_answer_or_a_failing_probe_keeps_the_leg_running(world, how):
+    a = world.add("alice", hold=True)
+    world.settle()
+    leg_id, _ = start_held_leg(world, a)
+    a.probe.fail = how == "raises"
+    world.advance(60)
+    assert a.probe.calls, "it was asked"
+    assert a.node.leg_state(leg_id) == "running" and a.node.busy() == 1
+    a.held.pop()()
+    assert [s for _, s in a.status.posts] == ["pending", "success"]
+    assert a.executor.stop_seen == [False]
+
+
+def test_the_probe_is_polled_at_the_lease_pace_only_while_the_leg_runs(world):
+    a = world.add("alice", hold=True)
+    world.settle()
+    _, payload, _ = world.request()
+    world.publish(payload)
+    world.advance(1.0)
+    assert a.probe.calls == [], "not asked before the leg runs"
+    world.advance(60)
+    times = [t for t, _ in a.probe.calls]
+    assert 5 <= len(times) <= 7, times
+    assert all(b - a_ >= 10 for a_, b in pairwise(times))
+    a.held.pop()()
+    done = len(a.probe.calls)
+    world.advance(60)
+    assert len(a.probe.calls) == done, "not asked once the leg is over"
+
+
+def test_a_slow_probe_is_not_called_again_until_it_answers(world):
+    a = world.add("alice", hold=True)
+    world.settle()
+    start_held_leg(world, a)
+    pending: list = []
+    a.node._probe_spawn = pending.append  # the worker has not run yet
+    world.advance(60)
+    assert len(pending) == 1
 
 
 # trust

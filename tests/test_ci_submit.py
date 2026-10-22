@@ -7,7 +7,7 @@ import pytest
 from _ci_harness import REPO, SHA, World
 
 from octopus.ci.engine import LegInfo
-from octopus.ci.exec import GhStatusPoster, GitExecutor
+from octopus.ci.exec import GhRunProbe, GhStatusPoster, GitExecutor
 from octopus.ci.messages import make_leg_id
 from octopus.ci.submit import Leg, Submitter
 from octopus.team import TeamState
@@ -384,6 +384,110 @@ def test_a_pull_request_status_falls_back_to_the_token_commit_if_the_parents_are
         GhStatusPoster(str(gh)).post(pr, "success", "ok")
     assert f"repos/{REPO}/statuses/MERGESHA" in out.read_text().split("\n")
     assert "could not find the PR head" in caplog.text  # the fallback leaves a trace
+
+
+# a running leg whose run was cancelled or superseded
+
+
+def fake_run_gh(tmp_path, run="completed\tsuccess", pull="open\tHEADSHA", parents="BASE\nHEADSHA"):
+    """A `gh` that answers from files, so a test can change the answer between polls."""
+    (tmp_path / "run").write_text(run + "\n")
+    (tmp_path / "pull").write_text(pull + "\n")
+    (tmp_path / "commit").write_text(parents + "\n")
+    gh = tmp_path / "gh"
+    gh.write_text(
+        "#!/bin/sh\n"
+        f'echo "$*" >> {tmp_path}/calls\n'
+        f"[ -e {tmp_path}/fail ] && exit 1\n"
+        'case "$*" in\n'
+        f"  *actions/runs/*) cat {tmp_path}/run ;;\n"
+        f"  *pulls/*) cat {tmp_path}/pull ;;\n"
+        f"  *git/commits/*) cat {tmp_path}/commit ;;\n"
+        "esac\n"
+    )
+    gh.chmod(gh.stat().st_mode | stat.S_IXUSR)
+    return gh
+
+
+def pr_leg(**changes):
+    from dataclasses import replace
+
+    base = replace(
+        leg_info(REPO, "MERGESHA"), event="pull_request", ref="refs/pull/7/merge", run_id="55"
+    )
+    return replace(base, **changes)
+
+
+def push_leg():
+    return pr_leg(event="push", ref="refs/heads/main")
+
+
+def gh_calls(tmp_path):
+    f = tmp_path / "calls"
+    return f.read_text().splitlines() if f.exists() else []
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="fake gh is a shell script")
+def test_probe_a_cancelled_attempt_is_stale(tmp_path):
+    probe = GhRunProbe(str(fake_run_gh(tmp_path, run="completed\tcancelled")))
+    assert probe.stale(pr_leg()) == "the run was cancelled"
+    assert f"repos/{REPO}/actions/runs/55/attempts/1" in gh_calls(tmp_path)[0]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="fake gh is a shell script")
+def test_probe_only_a_cancelled_conclusion_counts_not_a_running_or_finished_run(tmp_path):
+    probe = GhRunProbe(str(fake_run_gh(tmp_path, run="in_progress\t")))
+    assert probe.stale(pr_leg()) is None
+    (tmp_path / "run").write_text("in_progress\tcancelled\n")
+    assert probe.stale(pr_leg()) == "the run was cancelled"
+    # completed as soon as the submit job exited: that says nothing about the leg
+    (tmp_path / "run").write_text("completed\tsuccess\n")
+    assert GhRunProbe(str(tmp_path / "gh")).stale(push_leg()) is None
+    (tmp_path / "run").write_text("completed\tfailure\n")  # e.g. the hosted windows leg failed
+    assert GhRunProbe(str(tmp_path / "gh")).stale(push_leg()) is None
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="fake gh is a shell script")
+def test_probe_a_push_leg_is_not_stale_when_a_newer_commit_arrives(tmp_path):
+    probe = GhRunProbe(str(fake_run_gh(tmp_path, pull="open\tNEWER")))
+    assert probe.stale(push_leg()) is None
+    assert not any("pulls/" in c or "git/commits" in c for c in gh_calls(tmp_path))
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="fake gh is a shell script")
+def test_probe_a_pull_request_with_a_newer_head_or_closed_is_stale(tmp_path):
+    probe = GhRunProbe(str(fake_run_gh(tmp_path)))
+    assert probe.stale(pr_leg()) is None  # the head is the second parent of the merge commit
+    assert any(f"repos/{REPO}/pulls/7" in c for c in gh_calls(tmp_path))
+    (tmp_path / "pull").write_text("open\tNEWER\n")
+    assert probe.stale(pr_leg()) == "the pull request has a newer commit"
+    (tmp_path / "pull").write_text("closed\tHEADSHA\n")
+    assert probe.stale(pr_leg()) == "the pull request was closed"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="fake gh is a shell script")
+def test_probe_asks_what_cannot_change_only_once(tmp_path):
+    probe = GhRunProbe(str(fake_run_gh(tmp_path)))
+    for _ in range(3):
+        assert probe.stale(pr_leg()) is None
+    seen = gh_calls(tmp_path)
+    assert sum("actions/runs" in c for c in seen) == 1
+    assert sum("git/commits" in c for c in seen) == 1
+    assert sum("pulls/7" in c for c in seen) == 3  # only the PR can change
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="fake gh is a shell script")
+def test_probe_keeps_the_leg_running_on_any_doubt(tmp_path):
+    gh = fake_run_gh(tmp_path, run="completed\tsuccess", pull="closed\tNEWER")
+    (tmp_path / "fail").write_text("")  # rate limit, no network, expired login
+    assert GhRunProbe(str(gh)).stale(pr_leg()) is None
+    (tmp_path / "fail").unlink()
+    assert GhRunProbe(str(gh)).stale(pr_leg(ref="refs/heads/x")) is None  # no PR number
+    (tmp_path / "commit").write_text("ONLY\n")  # not a merge commit: the PR head is unknown
+    assert GhRunProbe(str(gh)).stale(pr_leg()) is None
+    (tmp_path / "run").write_text("???\n")
+    assert GhRunProbe(str(gh)).stale(pr_leg()) is None
+    assert GhRunProbe(str(tmp_path / "nope")).stale(pr_leg()) is None  # no gh at all
 
 
 # visibility: the machine's name, the reasons, the job summary

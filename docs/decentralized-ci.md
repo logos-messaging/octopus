@@ -65,7 +65,20 @@ for a member), and `gh auth setup-git` so the machine can clone with your creden
 4. The owner checks out the commit in a fresh directory with your git credentials, runs
    `.octopus/ci.sh`, streams the log, and posts the commit status `octopus/ci (<os>)` with your
    `gh` login. The job environment has no `GITHUB_TOKEN`/`GH_TOKEN`.
-5. Legs nobody leased go to a hosted runner (dynamic matrix); `windows` always does.
+5. While a leg runs, the node asks GitHub (with the owner's `gh`, every lease interval, 10 s)
+   whether it is still wanted, and stops it if not, so a cancelled run does not keep the machine
+   busy and push the next run onto a paid hosted runner. A leg is stale when the attempt of its
+   run concluded `cancelled` (typically `cancel-in-progress` after a new push), or, for a
+   `pull_request` leg, when the PR was closed or its head is no longer the head the leg started
+   for. The Actions run of a handed-off leg completes (success) as soon as the submit job exits,
+   so `completed` alone means nothing, and a completed run can no longer be cancelled by a newer
+   push, hence the PR check. A newer commit never stops a `push` leg. Any error, rate limit or
+   unknown answer keeps the leg running. A stale leg frees the machine at once, publishes `done`
+   with state `cancelled` (so no other node takes it over) and **posts no commit status**: it
+   could be a re-run of the same commit as a newer run, and a status posted here would replace
+   that run's. The `pending` posted at the start stays until the newer run replaces it; a run
+   cancelled with nothing newer behind it leaves `pending` on its commit.
+6. Legs nobody leased go to a hosted runner (dynamic matrix); `windows` always does.
 
 ## Busy machines: wait or fall back
 
@@ -177,5 +190,9 @@ one lost announce does not make a leg run twice).
 ## Not verified
 
 - Several team machines and a real fleet under load; a takeover with real laptops sleeping.
+- Stopping a stale leg against real GitHub: the probe is tested with a fake `gh` only, so the
+  exact answers of `actions/runs/{id}/attempts/{n}` and `pulls/{n}` (and the rate cost of about
+  one to two calls per 10 s per running leg) are assumed from the API docs. A leg that is still
+  waiting or claiming is not checked, only a running one.
 - Speed and cost of a real pipeline: nothing is compared with a hosted run yet.
 - Windows nodes, RSA SSH keys, a sandbox for jobs, membership removal before the next sync.

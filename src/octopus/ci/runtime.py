@@ -14,7 +14,7 @@ from ..team import Delegation, TeamError, TeamState
 from ..team.sync import build_list, key_from_text
 from ..transport import ChannelTransport
 from .engine import CiConfig, CiNode
-from .exec import GhStatusPoster, GitExecutor
+from .exec import GhRunProbe, GhStatusPoster, GitExecutor
 from .gh import Gh
 from .home import Home
 from .messages import CI_TOPIC, ListMsg, ListRequest
@@ -50,6 +50,7 @@ class CiRuntime:
         clock: Clock | None = None,
         executor=None,
         status=None,
+        probe=None,
         verifier: OidcVerifier | None = None,
     ) -> None:
         self.home = home
@@ -80,6 +81,7 @@ class CiRuntime:
             verifier=verifier or OidcVerifier("octopus-ci"),
             executor=executor or GitExecutor(home.work_dir),
             status=status or GhStatusPoster(),
+            probe=probe or GhRunProbe(),
             config=CiConfig(
                 allowed_repos=frozenset(allow.repos),
                 allowed_orgs=frozenset(allow.orgs),

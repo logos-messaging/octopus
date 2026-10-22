@@ -82,7 +82,7 @@ class NodeMessage(BaseModel):
     capacity: int = 1
     leg_id: str = ""
     epoch: int = 0
-    # done: success | failure | error
+    # done: success | failure | error | cancelled (the run was stopped, no status was posted)
     state: str = ""
     # The machine's name, for display only: it is not authenticated beyond the node's signature.
     name: str = ""

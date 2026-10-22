@@ -51,11 +51,13 @@ class FakeExecutor:
         self.exit_code = exit_code
         self.lines = lines
         self.stopped_early = False
+        self.stop_seen: list[bool] = []  # should_stop() as the leg ended
 
     def run(self, leg, on_line, should_stop):
         self.runs.append(leg)
         for line in self.lines:
             on_line(line)
+        self.stop_seen.append(should_stop())
         return ExecResult(self.exit_code)
 
 
@@ -67,6 +69,22 @@ class FakeStatus:
     def post(self, leg, state, description):
         self.posts.append((leg.leg_id, state))
         self.descriptions.append(description)
+
+
+class FakeProbe:
+    """Says a leg is stale (with a reason) once told so; `fail` makes it raise."""
+
+    def __init__(self, clock: Clock) -> None:
+        self.clock = clock
+        self.reasons: dict[str, str] = {}
+        self.calls: list[tuple[float, str]] = []
+        self.fail = False
+
+    def stale(self, leg):
+        self.calls.append((self.clock.t, leg.leg_id))
+        if self.fail:
+            raise OSError("gh is gone")
+        return self.reasons.get(leg.leg_id)
 
 
 def raw_pub(key: Ed25519PrivateKey) -> bytes:
@@ -85,6 +103,7 @@ class Machine:
         self.sign = generate_signing_key()
         self.executor = FakeExecutor()
         self.status = FakeStatus()
+        self.probe = FakeProbe(world.clock)
         self.transport = MemoryTransport(world.bus)
         self.held: list = []
         proof = make_node_proof(
@@ -106,6 +125,8 @@ class Machine:
             verifier=OidcVerifier("unused", fetch=world.issuer.jwks, clock=world.clock.monotonic),
             executor=self.executor,
             status=self.status,
+            probe=self.probe,
+            probe_spawn=lambda fn: fn(),
             config=CiConfig(
                 allowed_repos=frozenset({REPO}), os_name=os_name, workflow_pin=PIN, name=login
             ),

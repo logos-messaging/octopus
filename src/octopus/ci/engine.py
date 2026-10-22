@@ -8,6 +8,7 @@ How nodes agree who runs a leg, with no vote:
   short grace period; a claim that beats it (a higher epoch, or the lower score) makes it yield.
 - The owner publishes leases. When they stop for `lease_s` the next node in the order takes over
   with epoch + 1. A node that lost never posts a final status (fencing by epoch).
+- A leg whose run was cancelled, or whose pull request moved on, is stopped (see `RunProbe`).
 - Under a partition a leg may run twice. That costs machine time only: the commit status of a
   leg is keyed by (commit, OS), so the later post replaces the earlier.
 
@@ -120,6 +121,15 @@ class StatusPoster(Protocol):
         """state: pending | success | failure | error."""
 
 
+class RunProbe(Protocol):
+    def stale(self, leg: LegInfo) -> str | None:
+        """Why nobody wants this running leg any more (cancelled, superseded), or None.
+
+        None also means unknown: any error or doubt keeps the leg running. It may block for a
+        while: the node calls it from a worker thread, never from the tick.
+        """
+
+
 Spawn = Callable[[Callable[[], None]], None]
 
 
@@ -143,6 +153,9 @@ class _Leg:
     last_lease: float = 0.0
     dead: set[str] = field(default_factory=set)
     stop: bool = False
+    stale: str | None = None  # why the run is not wanted any more; the leg is closed at once
+    last_probe: float = 0.0
+    probing: bool = False
     # What the submitter may ask for again (it opens its channel after the run began).
     buffer: list[dict] = field(default_factory=list)
     chan: str | None = None
@@ -171,6 +184,8 @@ class CiNode:
         config: CiConfig,
         clock: Clock | None = None,
         spawn: Spawn | None = None,
+        probe: RunProbe | None = None,
+        probe_spawn: Spawn | None = None,
     ) -> None:
         self._transport = transport
         self._team = team
@@ -183,6 +198,8 @@ class CiNode:
         self._cfg = config
         self._clock = clock or SystemClock()
         self._spawn = spawn or _thread_spawn
+        self._probe = probe
+        self._probe_spawn = probe_spawn or _thread_spawn
         self.node_id = proof.node_id
         self._lock = threading.RLock()
         self._outbox: list[bytes] = []
@@ -426,11 +443,12 @@ class CiNode:
     def tick(self) -> None:
         now = self._clock.monotonic()
         to_run: list[_Leg] = []
+        to_probe: list[_Leg] = []
         with self._lock:
             if now - self._last_announce >= self._cfg.announce_s:
                 self._announce(now)
             for leg in list(self._legs.values()):
-                self._tick_leg(leg, now, to_run)
+                self._tick_leg(leg, now, to_run, to_probe)
                 if now - leg.created > self._cfg.forget_s and leg.state != "running":
                     del self._legs[leg.info.leg_id]
             for leg in self._legs.values():
@@ -442,8 +460,12 @@ class CiNode:
         self._flush()
         for leg in to_run:
             self._spawn(lambda leg=leg: self._run(leg))
+        for leg in to_probe:
+            self._probe_spawn(lambda leg=leg: self._probe_leg(leg))
 
-    def _tick_leg(self, leg: _Leg, now: float, to_run: list[_Leg]) -> None:
+    def _tick_leg(
+        self, leg: _Leg, now: float, to_run: list[_Leg], to_probe: list[_Leg]
+    ) -> None:
         cfg = self._cfg
         if leg.state == "busy":
             # In the order of arrival, one per free slot: planning a leg makes it count as load.
@@ -463,12 +485,48 @@ class CiNode:
             if now >= leg.start_at:
                 leg.state = "running"
                 leg.last_lease = now
+                leg.last_probe = now
                 self._announce(now)
                 self._send_leg("lease", leg)
                 to_run.append(leg)
-        elif leg.state == "running" and now - leg.last_lease >= cfg.lease_every_s:
-            leg.last_lease = now
-            self._send_leg("lease", leg)
+        elif leg.state == "running":
+            if now - leg.last_lease >= cfg.lease_every_s:
+                leg.last_lease = now
+                self._send_leg("lease", leg)
+            if (
+                self._probe is not None
+                and not leg.probing
+                and now - leg.last_probe >= cfg.lease_every_s
+            ):
+                leg.last_probe = now
+                leg.probing = True
+                to_probe.append(leg)
+
+    def _probe_leg(self, leg: _Leg) -> None:
+        """Stop a running leg whose run was cancelled or superseded, and free the machine.
+
+        No commit status is posted: the cancelled run may be a re-run of the same commit as a
+        newer run, and any state posted here would overwrite that run's status (statuses are
+        keyed by commit and context). The `pending` status posted at the start stays; the newer
+        run replaces it. `done` is published so that no other node takes the leg over when the
+        leases stop.
+        """
+        reason = None
+        try:
+            if self._probe is not None:
+                reason = self._probe.stale(leg.info)
+        except Exception:
+            log.warning("could not check if a CI leg is wanted: %s", leg.info.leg_id, exc_info=True)
+        with self._lock:
+            leg.probing = False
+            if reason is None or leg.state != "running":
+                return
+            leg.stale = reason
+            leg.state = "closed"
+            self._send_leg("done", leg, state="cancelled")
+            self._announce(self._clock.monotonic())
+        log.info("CI leg stopped: %s: %s", leg.info.leg_id, reason)
+        self._flush()
 
     def _claim(self, leg: _Leg, now: float) -> None:
         leg.epoch = leg.max_epoch + 1
@@ -492,7 +550,7 @@ class CiNode:
             result = self._executor.run(
                 info,
                 lambda line: send({"t": "log", "line": line[:MAX_LINE_BYTES]}),
-                lambda: leg.stop or self._stopping.is_set(),
+                lambda: leg.stop or leg.stale is not None or self._stopping.is_set(),
             )
             code, detail = result.exit_code, result.detail
             state = "success" if code == 0 else "failure"
@@ -500,10 +558,16 @@ class CiNode:
             log.exception("CI leg failed: %s", info.leg_id)
             detail = f"{type(e).__name__}"
         with self._lock:
-            fenced = leg.stop
-            leg.state = "yielded" if fenced else "closed"
-        log.info("CI leg finished: %s: %s%s", info.leg_id, state, " (fenced)" if fenced else "")
-        if not fenced:
+            stale, fenced = leg.stale, leg.stop
+            if stale is None:
+                leg.state = "yielded" if fenced else "closed"
+        if stale is not None:
+            # the state and `done` went out when the leg was found stale; no status, see _probe_leg
+            log.info("CI leg finished: %s: stopped: %s", info.leg_id, stale)
+            send({"t": "result", "state": "cancelled", "exit": code, "detail": stale})
+        else:
+            log.info("CI leg finished: %s: %s%s", info.leg_id, state, " (fenced)" if fenced else "")
+        if stale is None and not fenced:
             try:
                 self._status.post(
                     info, state, f"{state} on {self._machine()}" + (f": {detail}" if detail else "")
