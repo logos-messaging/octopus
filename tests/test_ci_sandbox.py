@@ -198,7 +198,8 @@ def test_cli_enable_status_disable(tmp_path, fake_docker):
     assert out.exit_code == 0 and "no sandbox" in out.output
     out = cli.invoke(
         app,
-        ["ci", "sandbox", "enable", "--image", "ubuntu:24.04", "--network", "none", "--data-dir", data],
+        ["ci", "sandbox", "enable", "--image", "ubuntu:24.04", "--runtime", "docker",
+         "--network", "none", "--data-dir", data],
     )
     assert out.exit_code == 0, out.output
     assert fake_docker.read_text().splitlines() == ["pull ubuntu:24.04"]
@@ -227,11 +228,15 @@ def test_a_network_other_than_none_is_warned_about():
 @posix_only
 def test_cli_enable_warns_about_the_network_unless_there_is_none(tmp_path, fake_docker):
     data = str(tmp_path / "data")
-    out = cli.invoke(app, ["ci", "sandbox", "enable", "--image", "python:3.12-slim", "--data-dir", data])
+    out = cli.invoke(
+        app,
+        ["ci", "sandbox", "enable", "--image", "python:3.12-slim", "--runtime", "docker", "--data-dir", data],
+    )
     assert out.exit_code == 0 and "169.254.169.254" in out.output
     out = cli.invoke(
         app,
-        ["ci", "sandbox", "enable", "--image", "python:3.12-slim", "--network", "none", "--data-dir", data],
+        ["ci", "sandbox", "enable", "--image", "python:3.12-slim", "--runtime", "docker",
+         "--network", "none", "--data-dir", data],
     )
     assert out.exit_code == 0 and "169.254.169.254" not in out.output
 
