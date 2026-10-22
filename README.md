@@ -15,34 +15,44 @@
 
 # Octopus
 
-Octopus turns the laptops of a team into GitHub Actions runners. Each running Octopus
-offers its machine as a runner; coordinators on VPS hosts take care of discovery,
-bootstrap, NAT traversal, and handing GitHub jobs to the right machine. Nodes talk to each
-other over [logos-delivery](https://github.com/logos-messaging/logos-delivery)
-(`liblogosdelivery`, via the [Python bindings](https://github.com/logos-messaging/logos-delivery-python-bindings)).
+Octopus turns the laptops of a team into GitHub Actions runners. Nodes talk to each other over
+[logos-delivery](https://github.com/logos-messaging/logos-delivery) (`liblogosdelivery`, via the
+[Python bindings](https://github.com/logos-messaging/logos-delivery-python-bindings)). There are
+three ways to use it, from the lightest to the heaviest.
 
 **Scope: trusted internal-team PRs only.** Octopus refuses fork PRs and senders who are
 not org members (or, for a repo set up with a token, cannot push to it). It is not a
 public runner pool.
 
-> Status: early. Runner and coordinator run end to end in tests; not yet tried against a real
-> GitHub runner and network. See the open issues and the MVP milestone for the plan.
+> Status: early (`v0.2.0`). It has run against real GitHub repos, but the nightly end-to-end test
+> is not on yet (#86) and several rough edges are open. See the open issues for the plan.
 > Read the [threat model](docs/threat-model.md) before lending a machine.
 
-## One CLI, two roles
+## Which one do I want?
+
+| I want to... | Run | Details |
+|---|---|---|
+| Run my team's workflows on team laptops, with no server and no runner registration | `octopus ci init owner/repo` | [decentralized-ci.md](docs/decentralized-ci.md) |
+| Make this laptop a plain GitHub runner for one repo (any matching job runs here) | `octopus init owner/repo` | [manual-runner.md](docs/manual-runner.md) |
+| Lend a laptop to a coordinator, or run the coordinator (a VPS with a public IP) that hands GitHub jobs to laptops | `octopus init` (guided) | [Quickstarts below](#quickstart-lend-a-laptop), [coordinator.md](docs/coordinator.md) |
+
+`octopus init owner/repo` and `octopus ci init owner/repo` look alike but are different: the first
+registers a GitHub runner, the second joins a team and registers nothing.
+
+## The CLI
 
 ```
-octopus init                              # guided setup of a runner or coordinator host
-octopus runner setup|allow|start|status|stop   # on runner hosts (laptops)
-octopus ci init owner/repo                # join the team of a repo (docs/decentralized-ci.md)
-octopus init owner/repo                   # register this machine as a GitHub runner, as a service (docs/manual-runner.md)
+octopus ci init owner/repo                 # join the team of a repo (docs/decentralized-ci.md)
+octopus init owner/repo                    # register this machine as a GitHub runner, as a service (docs/manual-runner.md)
 octopus init --role manual                 # the same, with questions
 octopus runner unregister-manual <repo>    # remove that runner
-octopus coordinator start|status          # on coordinator hosts (VPS)
-octopus jobs [--failed]                   # list jobs
-octopus logs <job> [-f]                   # job logs
-octopus explain <job>                     # timeline and why it failed
-octopus github setup|teardown             # one repo, token-based (docs/github-setup.md)
+octopus init                               # guided setup of a runner or coordinator host
+octopus runner setup|allow|start|status|stop   # on runner hosts (laptops)
+octopus coordinator start|status           # on coordinator hosts (VPS)
+octopus jobs [--failed]                    # list jobs
+octopus logs <job> [-f]                    # job logs
+octopus explain <job>                      # timeline and why it failed
+octopus github setup|teardown              # one repo, token-based (docs/github-setup.md)
 ```
 
 ## Quickstart: lend a laptop

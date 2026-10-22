@@ -190,3 +190,20 @@ def test_install_script_puts_the_extra_before_the_url():
     script = (Path(__file__).parent.parent / "scripts" / "install.sh").read_text()
     assert 'SPEC="octopus[logos] @ git+' in script
     assert "$SPEC[logos]" not in script
+
+
+def test_install_script_names_all_three_ways_and_the_path_hint():
+    script = (Path(__file__).parent.parent / "scripts" / "install.sh").read_text()
+    assert "octopus ci init <owner/repo>" in script
+    assert "octopus init <owner/repo>" in script
+    assert "pipx ensurepath" in script
+
+
+def test_version_matches_pyproject():
+    import octopus
+
+    tomllib = pytest.importorskip("tomllib")  # Python 3.11+
+
+    root = Path(__file__).parent.parent
+    declared = tomllib.loads((root / "pyproject.toml").read_text())["project"]["version"]
+    assert octopus.__version__ == declared

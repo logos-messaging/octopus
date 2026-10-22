@@ -67,7 +67,10 @@ def ci_init(
     yes: bool = YesOpt,
     data_dir: Path | None = DataDirOpt,
 ) -> None:
-    """Join the team as a member, or as its admin: Octopus finds out which you are."""
+    """Join the team as a member, or as its admin: Octopus finds out which you are.
+
+    This does not register a GitHub runner: for that, run `octopus init owner/repo`.
+    """
     from .agent.runner import default_data_dir
     from .ci.gh import Gh
     from .ci.wizard import init_ci
