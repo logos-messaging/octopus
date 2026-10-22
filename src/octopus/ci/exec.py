@@ -140,6 +140,27 @@ class GhStatusPoster:
     def __init__(self, gh: str | None = None) -> None:
         self._gh = gh or shutil.which("gh") or "gh"
 
+    def status_sha(self, leg: LegInfo) -> str:
+        """The commit to put the status on.
+
+        On a pull request the token's commit is GitHub's synthetic merge commit, which no PR
+        shows. The PR head, the one the PR page lists statuses for, is its second parent.
+        """
+        if leg.event != "pull_request":
+            return leg.sha
+        try:
+            proc = subprocess.run(
+                [self._gh, "api", f"repos/{leg.repo}/git/commits/{leg.sha}", "--jq", ".parents[].sha"],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return leg.sha
+        parents = proc.stdout.split() if proc.returncode == 0 else []
+        return parents[1] if len(parents) == 2 else leg.sha
+
     def post(self, leg: LegInfo, state: str, description: str) -> None:
         proc = subprocess.run(
             [
@@ -147,7 +168,7 @@ class GhStatusPoster:
                 "api",
                 "-X",
                 "POST",
-                f"repos/{leg.repo}/statuses/{leg.sha}",
+                f"repos/{leg.repo}/statuses/{self.status_sha(leg)}",
                 "-f",
                 f"state={state}",
                 "-f",

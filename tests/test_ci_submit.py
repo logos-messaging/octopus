@@ -248,3 +248,44 @@ def test_a_busy_node_does_not_keep_the_submitter_waiting(world):
     started = world.clock.t
     result = sub.submit(legs_for(world, "linux"))
     assert result.unhandled == ["linux"] and world.clock.t - started < 40
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="fake gh is a shell script")
+def test_a_pull_request_status_goes_on_the_pr_head_not_the_merge_commit(tmp_path):
+    out = tmp_path / "args.txt"
+    gh = tmp_path / "gh"
+    gh.write_text(
+        "#!/bin/sh\n"
+        'case "$*" in\n'
+        f'  *git/commits/*) printf "BASE\\nHEADSHA\\n" ;;\n'
+        f'  *) printf "%s\\n" "$@" > {out} ;;\n'
+        "esac\n"
+    )
+    gh.chmod(gh.stat().st_mode | stat.S_IXUSR)
+    from dataclasses import replace
+
+    pr = replace(leg_info(REPO, "MERGESHA", "macos"), event="pull_request")
+    GhStatusPoster(str(gh)).post(pr, "success", "ok")
+    assert f"repos/{REPO}/statuses/HEADSHA" in out.read_text().split("\n")
+    push = replace(pr, event="push")
+    GhStatusPoster(str(gh)).post(push, "success", "ok")
+    assert f"repos/{REPO}/statuses/MERGESHA" in out.read_text().split("\n")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="fake gh is a shell script")
+def test_a_pull_request_status_falls_back_to_the_token_commit_if_the_parents_are_unknown(tmp_path):
+    out = tmp_path / "args.txt"
+    gh = tmp_path / "gh"
+    gh.write_text(
+        "#!/bin/sh\n"
+        'case "$*" in\n'
+        "  *git/commits/*) exit 1 ;;\n"
+        f'  *) printf "%s\\n" "$@" > {out} ;;\n'
+        "esac\n"
+    )
+    gh.chmod(gh.stat().st_mode | stat.S_IXUSR)
+    from dataclasses import replace
+
+    pr = replace(leg_info(REPO, "MERGESHA", "macos"), event="pull_request")
+    GhStatusPoster(str(gh)).post(pr, "success", "ok")
+    assert f"repos/{REPO}/statuses/MERGESHA" in out.read_text().split("\n")
