@@ -11,6 +11,7 @@ import os
 import plistlib
 import subprocess
 import sys
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -36,6 +37,8 @@ def task_for(name: str) -> str:
 
 # Environment captured at install time: where the native library bindings and the data live.
 PASSTHROUGH_ENV = ("OCTOPUS_BINDINGS", "OCTOPUS_DATA_DIR")
+
+BOOTSTRAP_TRIES = 8
 
 # Exit codes that restarting cannot fix (see cli.py: usage, bad settings).
 NO_RESTART_EXIT_CODES = (2, 3)
@@ -257,7 +260,14 @@ def _install_launchd(spec: ServiceSpec, home: Path, run: Run, uid: int) -> Servi
     _atomic_write(path, render_launchd(spec, log))
     domain = f"gui/{uid}"
     run(["launchctl", "bootout", f"{domain}/{label_for(spec.name)}"])  # not loaded yet is fine
-    _check(run(["launchctl", "bootstrap", domain, str(path)]), "could not load the launchd job")
+    # bootout returns before the old job is gone, and bootstrap then fails with an I/O error
+    # (exit code 5): try again for a few seconds.
+    for _ in range(BOOTSTRAP_TRIES - 1):
+        if run(["launchctl", "bootstrap", domain, str(path)]).returncode == 0:
+            break
+        time.sleep(1.0)
+    else:
+        _check(run(["launchctl", "bootstrap", domain, str(path)]), "could not load the launchd job")
     return ServiceResult(
         path, (f"logs: {log}", "starts at login; `octopus runner stop` leaves it stopped")
     )

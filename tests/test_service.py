@@ -71,6 +71,34 @@ def test_install_launchd(tmp_path):
     assert run.calls[1] == ["launchctl", "bootstrap", "gui/501", str(res.path)]
 
 
+def test_install_launchd_retries_while_the_old_job_is_still_going_away(tmp_path, monkeypatch):
+    monkeypatch.setattr(service.time, "sleep", lambda _s: None)
+
+    class Flaky(FakeRun):
+        def __call__(self, argv):
+            self.calls.append(argv)
+            bootstraps = sum(1 for c in self.calls if c[:2] == ["launchctl", "bootstrap"])
+            bad = argv[:2] == ["launchctl", "bootstrap"] and bootstraps <= 2
+            return subprocess.CompletedProcess(argv, 5 if bad else 0, "", "I/O error" if bad else "")
+
+    run = Flaky()
+    service.install(SPEC, "darwin", tmp_path, run, uid=501)
+    assert [c[1] for c in run.calls].count("bootstrap") == 3
+
+
+def test_install_launchd_gives_up_after_the_last_try(tmp_path, monkeypatch):
+    monkeypatch.setattr(service.time, "sleep", lambda _s: None)
+
+    class Never(FakeRun):
+        def __call__(self, argv):
+            self.calls.append(argv)
+            bad = argv[:2] == ["launchctl", "bootstrap"]
+            return subprocess.CompletedProcess(argv, 5 if bad else 0, "", "I/O error" if bad else "")
+
+    with pytest.raises(service.ServiceError, match="could not load"):
+        service.install(SPEC, "darwin", tmp_path, Never(), uid=501)
+
+
 def test_install_is_idempotent(tmp_path):
     for _ in range(2):
         service.install(SPEC, "darwin", tmp_path, FakeRun(), uid=1)
