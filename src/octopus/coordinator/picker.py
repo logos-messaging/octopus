@@ -40,6 +40,12 @@ def pick_label_of(labels: list[str]) -> str | None:
     return next((lbl for lbl in labels if lbl.casefold().startswith(PICK_LABEL_PREFIX)), None)
 
 
+def target_covers(target: str, repo: str) -> bool:
+    """Whether a runner registered on `target` (`owner/name` or `owner`) can take jobs of `repo`."""
+    target, repo = target.casefold(), repo.casefold()
+    return target == repo if "/" in target else repo.split("/", 1)[0] == target
+
+
 class Picker:
     def __init__(
         self,
@@ -67,7 +73,11 @@ class Picker:
         candidates = []
         for p in self._registry.idle_runners():
             label = pick_label_of(p.labels)
-            if label is not None and label.casefold() in self._allowed:
+            if label is None or label.casefold() not in self._allowed:
+                continue
+            # A runner that names its target takes only jobs of that repo or org. A runner that
+            # names none (made before this field) can still take jobs of any allowed repo.
+            if p.target is None or target_covers(p.target, repo):
                 candidates.append((label, p.runner_id))
         now = self._clock.monotonic()
         with self._lock:

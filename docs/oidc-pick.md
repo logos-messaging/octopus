@@ -115,6 +115,9 @@ See also [threat-model.md](threat-model.md), "OIDC pick mode".
   labels in `OCTOPUS_PICK_LABELS`, so a forged presence cannot send a job to a label that no
   registered runner has. A forged presence for an allowed label can still make that runner look
   free: the job then waits in GitHub's queue until that runner takes it.
+- A runner can name in its presence the repo or org it is registered on (its target). The
+  coordinator then picks it only for jobs of that repo, or of a repo of that org. A runner that
+  names no target can be picked for any allowed repo.
 
 ## Not covered here
 
