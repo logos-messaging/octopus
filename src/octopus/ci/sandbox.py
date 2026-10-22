@@ -72,6 +72,16 @@ class Sandbox:
             "if the job needs no network: see docs/decentralized-ci.md"
         )
 
+    def pin_hint(self) -> str | None:
+        """An image named by tag can change under the node: say how to pin it by digest."""
+        if "@sha256:" in self.image:
+            return None
+        return (
+            f"{self.image} is not pinned: its tag can change under the node. Pin it by digest "
+            f"(<name>@sha256:...), which you get with: {self.runtime} image inspect "
+            f"--format '{{{{index .RepoDigests 0}}}}' {self.image}"
+        )
+
     def group_warning(self) -> str | None:
         """Rootful Docker makes its group root on the host: say so when this user is in it."""
         if self.runtime != "docker":

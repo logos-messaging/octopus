@@ -382,7 +382,8 @@ ci_app.add_typer(sandbox_app, name="sandbox")
 @sandbox_app.command("enable")
 def sandbox_enable(
     image: str = typer.Option(
-        ..., "--image", help="Container image with the toolchain your jobs need (your choice)."
+        ..., "--image", help="Container image with the toolchain your jobs need, pinned by digest "
+        "(e.g. python:3.12-slim@sha256:...). Your choice, never the repo's.",
     ),
     runtime: str = typer.Option("docker", "--runtime", help="docker or podman."),
     network: str = typer.Option("bridge", "--network", help="Container network; none cuts it off."),
@@ -416,7 +417,7 @@ def sandbox_enable(
             raise _fail(f"could not pull the image: exit code: {done.returncode}", 4)
     _home(data_dir).save_sandbox(sandbox)
     typer.echo(f"jobs now run in {sandbox.image} ({sandbox.runtime}, network {sandbox.network})")
-    for warning in (sandbox.network_warning(), sandbox.group_warning()):
+    for warning in (sandbox.network_warning(), sandbox.group_warning(), sandbox.pin_hint()):
         if warning:
             typer.echo(f"warning: {warning}", err=True)
     typer.echo("restart the node for it to take effect: octopus runner install-service")

@@ -134,8 +134,12 @@ used: lists are re-published every 5 minutes and on request.
 
 ## Sandbox: jobs in a container (Linux hosts)
 
+**Optional.** A node works without it, and nothing here needs Docker: you install a container
+runtime (rootless Podman is preferred, Docker works) only if you turn the sandbox on. The
+warnings below about the `docker` group apply only to a node that chose rootful Docker.
+
 ```bash
-octopus ci sandbox enable --image <image>      # then restart the node (install-service)
+octopus ci sandbox enable --image <image>@sha256:<digest>   # then restart the node (install-service)
 octopus ci sandbox status | disable
 ```
 
@@ -150,6 +154,13 @@ sees **only the checkout**, mounted at `/work`:
   (`--cpus`, 2) and processes (1024), and `--network` (default `bridge`; `none` cuts the job off);
 - run as the owner's uid inside the container, removed afterwards (`--rm`, and `rm -f` if the node
   stops it).
+
+**Choosing the image.** It must hold what the job runs. `ubuntu:24.04` has no Python, so this
+repo's `.octopus/ci.sh` ("no Python 3.10 or newer found") needs an image such as
+`python:3.12-slim` (bash, Python and venv are in it). **Pin it by digest**
+(`python:3.12-slim@sha256:...`, from `docker image inspect --format '{{index .RepoDigests 0}}'
+python:3.12-slim` after a pull), or the tag can change under the node; `enable` says so when it
+is not pinned.
 
 **The image is your choice, never the repo's:** it needs the toolchain the job uses (for Octopus's
 own `.octopus/ci.sh`, Python and `make`). Nothing is cached between jobs. A job with the network on

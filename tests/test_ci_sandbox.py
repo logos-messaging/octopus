@@ -261,3 +261,10 @@ def test_no_docker_group_on_the_host_means_no_warning(monkeypatch):
 
     monkeypatch.setattr(grp, "getgrnam", missing)
     assert Sandbox(image="python:3.12-slim").group_warning() is None
+
+
+def test_an_image_named_by_tag_gets_a_pin_hint_and_one_by_digest_does_not():
+    hint = Sandbox(image="python:3.12-slim").pin_hint()
+    assert hint and "@sha256:" in hint and "image inspect" in hint
+    digest = "a" * 64
+    assert Sandbox(image=f"python:3.12-slim@sha256:{digest}").pin_hint() is None
