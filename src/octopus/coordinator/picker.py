@@ -8,6 +8,7 @@ by label, so a unique label is what makes the choice stick.
 from __future__ import annotations
 
 import threading
+from collections.abc import Collection
 from dataclasses import dataclass
 
 from ..clock import Clock, SystemClock
@@ -46,8 +47,14 @@ class Picker:
         clock: Clock | None = None,
         reserve_ttl_s: float = DEFAULT_RESERVE_TTL_S,
         running_ttl_s: float = RUNNING_TTL_S,
+        *,
+        allowed_labels: Collection[str],
     ) -> None:
         self._registry = registry
+        # Only these labels are given out. Presence is not signed, so any peer can announce any
+        # label: without this list, a label that no registered runner has would win the pick and
+        # the job would stay queued in GitHub (#80).
+        self._allowed = frozenset(lbl.casefold() for lbl in allowed_labels)
         self._clock = clock or SystemClock()
         self._reserve_ttl_s = reserve_ttl_s
         self._running_ttl_s = running_ttl_s
@@ -60,7 +67,7 @@ class Picker:
         candidates = []
         for p in self._registry.idle_runners():
             label = pick_label_of(p.labels)
-            if label is not None:
+            if label is not None and label.casefold() in self._allowed:
                 candidates.append((label, p.runner_id))
         now = self._clock.monotonic()
         with self._lock:

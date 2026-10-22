@@ -22,6 +22,7 @@ from ..transport.config import (
     TCP_PORT_ENV,
     coordinator_config,
 )
+from .picker import PICK_LABEL_PREFIX
 from .webhook_server import DEFAULT_PATH
 
 REPO_ENV = "OCTOPUS_GITHUB_REPO"
@@ -40,6 +41,8 @@ API_URL_ENV = "OCTOPUS_GITHUB_API_URL"
 PEERS_ENV = "OCTOPUS_COORDINATOR_PEERS"
 # OIDC pick mode (docs/oidc-pick.md): on when the audience is set; needs no GitHub credential.
 OIDC_AUDIENCE_ENV = "OCTOPUS_OIDC_AUDIENCE"
+# The `octopus-<name>` labels that pick mode may give out, comma separated. Required in pick mode.
+PICK_LABELS_ENV = "OCTOPUS_PICK_LABELS"
 
 DEFAULT_LISTEN = "127.0.0.1:8080"
 COORDINATOR_DIR = "coordinator"
@@ -108,6 +111,8 @@ class CoordinatorConfig:
     # coordinator id -> Ed25519 public key of the other coordinators (see PEERS_ENV)
     peers: dict[str, str] = field(default_factory=dict)
     oidc_audience: str = ""
+    # the unique labels of the registered manual runners (see PICK_LABELS_ENV)
+    pick_labels: list[str] = field(default_factory=list)
 
     @property
     def pick_enabled(self) -> bool:
@@ -146,6 +151,7 @@ class CoordinatorConfig:
             entry_nodes=_list(env.get(ENTRY_NODES_ENV)),
             peers=parse_peers(env.get(PEERS_ENV)),
             oidc_audience=env.get(OIDC_AUDIENCE_ENV, "").strip(),
+            pick_labels=_list(env.get(PICK_LABELS_ENV)),
         )
         config.validate()
         return config
@@ -165,6 +171,14 @@ class CoordinatorConfig:
                 f"no GitHub credentials: set {TOKEN_ENV} (token setup) or {APP_ID_ENV} and "
                 f"{APP_KEY_FILE_ENV} (GitHub App), or {OIDC_AUDIENCE_ENV} (OIDC pick mode)"
             )
+        if self.pick_enabled and not self.pick_labels:
+            raise ConfigError(
+                f"pick mode is on but no runner label is allowed: set {PICK_LABELS_ENV} to the "
+                "octopus-<name> labels of the runners you registered"
+            )
+        for label in self.pick_labels:
+            if not label.casefold().startswith(PICK_LABEL_PREFIX):
+                raise ConfigError(f"invalid pick label, expected {PICK_LABEL_PREFIX}<name>: {label}")
         if not self.allowed_repos and not self.allowed_orgs:
             raise ConfigError(
                 f"nothing is allowed, every job would be rejected: set {REPO_ENV}, "
