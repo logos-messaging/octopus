@@ -43,6 +43,16 @@ The service runs `python -m octopus runner start` from the runner's data directo
 
 **Surviving a reboot.** Per-user services start when the user logs in. On Linux, to start at boot without a login, an admin runs `loginctl enable-linger <user>`; `install-service` prints this when linger is off. On a laptop without auto-login, macOS and Windows start the runner at the next login.
 
+**On a server, as a dedicated user (`Failed to connect to bus`).** `systemd --user` needs a login session. If you got to the user with `sudo -iu <user>` from root, there is none, and `install-service` (or the service step of `octopus ci init`) fails with `Failed to connect to bus: Permission denied`. Either log in properly (`ssh <user>@host`, or `machinectl shell <user>@`), or, as root, run `loginctl enable-linger <user>`, then as the user:
+
+```bash
+export XDG_RUNTIME_DIR=/run/user/$(id -u)
+export DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus
+systemctl --user status        # prints a state: the bus works
+```
+
+and run the install again. The user should have no `sudo` rights and none of your other credentials: a job runs as that user (see `docs/decentralized-ci.md`).
+
 `octopus runner stop` stops the running process; on macOS and Linux the service manager does not restart it after a clean stop. **Known issue:** until the library crash on node stop is fixed upstream (#64), a stop can exit with an error some of the time, and then launchd or systemd start the runner again. To stop it for good, use `octopus runner uninstall-service` (or `launchctl bootout` / `systemctl --user stop octopus-runner`). `uninstall-service` removes the automatic start while keeping your settings, keys and allowlist.
 
 ## Check after a reboot
