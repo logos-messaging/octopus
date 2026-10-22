@@ -226,7 +226,7 @@ def test_status_poster_calls_gh_with_the_commit_and_context(tmp_path):
         GhStatusPoster(str(failing)).post(leg_info(REPO, SHA), "success", "x")
 
 
-def test_an_os_with_no_idle_node_is_given_up_early_not_after_the_full_wait(world):
+def test_an_os_with_no_node_online_is_given_up_early_not_after_the_full_wait(world):
     world.add("alice", "macos")
     world.settle()
     sub, _ = make_submitter(world, wait_s=45)
@@ -236,18 +236,109 @@ def test_an_os_with_no_idle_node_is_given_up_early_not_after_the_full_wait(world
     assert 25 <= world.clock.t - started < 40  # after two announce intervals, not the full 45 s
 
 
-def test_a_busy_node_does_not_keep_the_submitter_waiting(world):
-    busy = world.add("alice", "linux", hold=True)
-    world.settle()
-    # the node is running another leg, so it announces busy
-    _, payload, _ = world.request(run_id="1")
+def make_busy(world, machine, run_id="1"):
+    """The machine takes a run and keeps it in progress, so it announces busy."""
+    _, payload, _ = world.request(run_id=run_id)
     world.publish(payload)
     world.advance(5)
-    assert busy.node.busy() == 1
+    assert machine.node.busy() == 1
+
+
+def releasing(world, machine, at):
+    """A pump that lets the machine finish its run once the clock reaches `at`."""
+
+    freed = []
+
+    def pump():
+        world.advance(0.5)
+        if world.clock.t >= at and machine.held and not freed:
+            freed.append(machine.held.pop(0)())
+
+    return pump
+
+
+def test_a_busy_machine_is_waited_for_and_takes_the_leg_when_it_is_free(world):
+    alice = world.add("alice", "linux", hold=True)
+    world.settle()
+    make_busy(world, alice)
+    sub, _ = make_submitter(world, wait_s=45)
+    sub._pump = releasing(world, alice, at=world.clock.t + 100)  # well past discover and wait
+    started = world.clock.t
+    legs = legs_for(world, "linux")
+    result = sub.submit(legs)
+    assert result.handled == {"linux": alice.node_id} and result.unhandled == []
+    assert 100 <= world.clock.t - started < 115
+    assert alice.node.leg_state(legs[0].leg_id) == "running"
+    alice.held.pop(0)()  # the leg finishes
+    assert [leg.run_id for leg in alice.executor.runs] == ["1", "77"]
+    assert [s for _, s in alice.status.posts] == ["pending", "success", "pending", "success"]
+
+
+def test_busy_longer_than_busy_wait_falls_back_with_its_own_reason(world):
+    alice = world.add("alice", "linux", hold=True)
+    world.settle()
+    make_busy(world, alice)
+    sub, _ = make_submitter(world, wait_s=45, busy_wait_s=90)
+    started = world.clock.t
+    result = sub.submit(legs_for(world, "linux"))
+    assert result.unhandled == ["linux"] and not alice.executor.runs[1:]
+    assert result.reasons == {"linux": "all team machines of this OS were busy for 90 s"}
+    assert 90 <= world.clock.t - started < 100
+
+
+def test_the_machine_does_not_run_a_leg_the_submitter_already_gave_up(world):
+    alice = world.add("alice", "linux", hold=True)
+    world.settle()
+    make_busy(world, alice)
+    sub, _ = make_submitter(world, busy_wait_s=60)
+    legs = legs_for(world, "linux")
+    assert sub.submit(legs).unhandled == ["linux"]
+    world.advance(40)  # the requests stopped
+    alice.held.pop(0)()  # free at last, but nobody asks any more
+    world.advance(60)
+    assert alice.node.leg_state(legs[0].leg_id) == "busy" and len(alice.executor.runs) == 1
+
+
+def test_a_busy_machine_of_another_scope_does_not_make_the_submitter_wait(world):
+    from octopus.team import make_member_list
+
+    world.member_lists.append(
+        make_member_list(world.team_key, "org:other", 1, ["mallory"], world.clock.now())
+    )
+    mallory = world.add("mallory", "linux", hold=True)  # a member of org:other, not of acme
+    world.settle()
+    make_busy(world, mallory)
     sub, _ = make_submitter(world, wait_s=45)
     started = world.clock.t
     result = sub.submit(legs_for(world, "linux"))
-    assert result.unhandled == ["linux"] and world.clock.t - started < 40
+    assert result.reasons == {"linux": "no team machine of this OS was online"}
+    assert 25 <= world.clock.t - started < 40
+
+
+def test_a_busy_machine_of_another_os_does_not_make_the_submitter_wait(world):
+    mac = world.add("alice", "macos", hold=True)
+    world.settle()
+    make_busy_mac = world.request("macos", run_id="1")[1]
+    world.publish(make_busy_mac)
+    world.advance(5)
+    assert mac.node.busy() == 1
+    sub, _ = make_submitter(world, wait_s=45)
+    started = world.clock.t
+    result = sub.submit(legs_for(world, "linux"))
+    assert result.reasons == {"linux": "no team machine of this OS was online"}
+    assert world.clock.t - started < 40
+
+
+def test_a_busy_machine_that_went_away_stops_being_waited_for(world):
+    alice = world.add("alice", "linux", hold=True)
+    world.settle()
+    make_busy(world, alice)
+    alice.frozen = True  # the laptop sleeps: no more announces
+    sub, _ = make_submitter(world, busy_wait_s=240)
+    started = world.clock.t
+    result = sub.submit(legs_for(world, "linux"))
+    assert result.reasons == {"linux": "no team machine of this OS was online"}
+    assert world.clock.t - started < 40
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="fake gh is a shell script")
@@ -323,7 +414,7 @@ def test_the_result_names_the_machine_and_explains_each_fallback(world):
     sub, _ = make_submitter(world, wait_s=45)
     result = sub.submit(legs_for(world, "linux", "macos"))
     assert result.names == {"macos": "bob"}
-    assert result.reasons == {"linux": "no idle team machine of this OS was online"}
+    assert result.reasons == {"linux": "no team machine of this OS was online"}
 
 
 def test_the_reason_is_a_timeout_when_an_idle_machine_never_answers(world):
@@ -349,12 +440,21 @@ def test_the_summary_table_lists_each_leg_and_cleans_names_from_remote_machines(
         handled={"macos": "jqf7sjhugxa7j7ux"},
         names={"macos": "evil|name\n`<script>`"},
         unhandled=["linux"],
-        reasons={"linux": "no idle team machine of this OS was online"},
+        reasons={"linux": "no team machine of this OS was online"},
     )
     text = render(["linux", "macos"], result)
     rows = [ln for ln in text.splitlines() if ln.startswith("| ")]
     assert len(rows) == 4  # header, separator, two legs: a name cannot add rows or cells
     assert all(ln.count("|") == 4 for ln in rows)
-    assert "GitHub-hosted runner" in text and "no idle team machine" in text
+    assert "GitHub-hosted runner" in text and "no team machine" in text
     assert "`<" not in text and "script" in text and "node `jqf7sjhugxa7" in text
     assert "evilname" in text
+
+
+def test_the_summary_shows_the_busy_reason():
+    from octopus.ci.submit import SubmitResult
+    from octopus.ci.summary import render
+
+    reason = "all team machines of this OS were busy for 240 s"
+    text = render(["macos"], SubmitResult(unhandled=["macos"], reasons={"macos": reason}))
+    assert "GitHub-hosted runner | all team machines of this OS were busy for 240 s |" in text

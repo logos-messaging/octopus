@@ -136,6 +136,117 @@ def test_a_busy_node_declines_and_the_next_one_runs(world):
     assert runs(b) == [1]
 
 
+def busy_machine(world, **kw):
+    """A started machine that is running a leg and keeps it in progress."""
+    m = world.add("alice", hold=True, **kw)
+    world.settle()
+    world.publish(world.request(run_id="1")[1])
+    world.advance(5)
+    assert m.node.busy() == 1
+    return m
+
+
+def repeat(world, payloads, times, every=3):
+    """The submitter repeating its requests."""
+    for _ in range(times):
+        for payload in payloads:
+            world.publish(payload)
+        world.advance(every)
+
+
+def test_a_leg_declined_while_busy_is_run_when_the_node_is_free(world):
+    a = busy_machine(world)
+    leg_id, payload, _ = world.request(run_id="2")
+    repeat(world, [payload], 5)
+    assert a.node.leg_state(leg_id) == "busy" and len(a.held) == 1
+    a.held.pop(0)()  # the first leg ends: the node is free
+    repeat(world, [payload], 2)
+    assert a.node.leg_state(leg_id) == "running"
+    assert [leg.run_id for leg in a.executor.runs] == ["1"]  # the second is in progress
+    a.held.pop(0)()
+    assert [leg.run_id for leg in a.executor.runs] == ["1", "2"]
+    assert a.node.leg_state(leg_id) == "closed"
+
+
+def test_a_replayed_request_after_the_node_is_free_does_not_run_the_leg_twice(world):
+    a = busy_machine(world)
+    leg_id, payload, _ = world.request(run_id="2")
+    world.publish(payload)
+    a.held.pop(0)()
+    repeat(world, [payload], 10)  # the token verifies once (jti): replays go by digest
+    assert len(a.held) == 1
+    a.held.pop(0)()
+    repeat(world, [payload], 5)
+    assert [leg.run_id for leg in a.executor.runs] == ["1", "2"] and not a.held
+    assert a.node.leg_state(leg_id) == "closed"
+
+
+def test_a_leg_nobody_asks_for_any_more_is_not_run_when_the_node_is_free(world):
+    a = busy_machine(world)
+    leg_id, payload, _ = world.request(run_id="2")
+    world.publish(payload)  # one request, then the submitter gives up
+    world.advance(40)
+    a.held.pop(0)()
+    world.advance(10)
+    assert a.node.leg_state(leg_id) == "busy" and not a.held
+    assert [leg.run_id for leg in a.executor.runs] == ["1"]
+
+
+def test_legs_declined_while_busy_run_one_at_a_time_oldest_first(world):
+    a = busy_machine(world)
+    payloads = [world.request(run_id=r)[1] for r in ("2", "3")]
+    repeat(world, payloads, 2, every=1)
+    a.held.pop(0)()
+    repeat(world, payloads, 5)
+    assert len(a.held) == 1  # capacity 1: not both at once
+    a.held.pop(0)()
+    assert [leg.run_id for leg in a.executor.runs] == ["1", "2"]  # the oldest first
+    repeat(world, payloads, 5)
+    a.held.pop(0)()
+    assert [leg.run_id for leg in a.executor.runs] == ["1", "2", "3"]
+
+
+def test_a_node_that_was_busy_does_not_take_a_leg_an_idle_node_already_has(world):
+    a = busy_machine(world)
+    b = world.add("bob", hold=True)
+    world.settle()
+    # a leg that a would win the rank for, were it idle
+    run_id = next(
+        str(i)
+        for i in range(2, 200)
+        if score(f"{REPO}:{i}:1:linux", a.node_id) < score(f"{REPO}:{i}:1:linux", b.node_id)
+    )
+    leg_id, payload, _ = world.request(run_id=run_id)
+    repeat(world, [payload], 4)
+    assert len(b.held) == 1 and b.node.leg_state(leg_id) == "running"
+    a.held.pop(0)()  # a is free; the leg is already b's
+    repeat(world, [payload], 10)
+    assert [leg.run_id for leg in a.executor.runs] == ["1"]
+    assert a.node.leg_state(leg_id) == "waiting"  # it follows b's lease and claims nothing
+    b.held.pop(0)()
+    assert [s for _, s in b.status.posts] == ["pending", "success"]
+    assert [leg.run_id for leg in a.executor.runs] == ["1"]
+
+
+def test_a_freed_node_takes_over_a_leg_whose_owner_went_silent(world):
+    a = busy_machine(world)
+    b = world.add("bob", hold=True)
+    world.settle()
+    run_id = next(
+        str(i)
+        for i in range(2, 200)
+        if score(f"{REPO}:{i}:1:linux", a.node_id) < score(f"{REPO}:{i}:1:linux", b.node_id)
+    )
+    leg_id, payload, _ = world.request(run_id=run_id)
+    world.publish(payload)
+    world.advance(5)
+    assert b.node.leg_state(leg_id) == "running"
+    b.frozen = True  # b's laptop sleeps
+    a.held.pop(0)()
+    repeat(world, [payload], 25)  # the lease lapses after 30 s; the submitter keeps asking
+    assert a.node.leg_state(leg_id) == "running"
+
+
 def test_takeover_when_the_owner_goes_silent_and_the_old_owner_is_fenced(world):
     a = world.add("alice", hold=True)
     b = world.add("bob", hold=True)

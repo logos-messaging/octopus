@@ -83,6 +83,9 @@ class CiConfig:
     announce_s: float = 10.0
     offline_s: float = 35.0
     forget_s: float = 6 * 3600.0 + 900.0
+    # A leg declined for being busy is run later only while the submitter still repeats its request
+    # (it does every few seconds): once it gave up and went to a hosted runner, running it is waste.
+    request_fresh_s: float = 30.0
     reply_hold_s: float = 300.0  # the reply channel stays open this long after the result
     max_buffer: int = 2000
 
@@ -128,13 +131,15 @@ def _thread_spawn(fn: Callable[[], None]) -> None:
 class _Leg:
     info: LegInfo
     created: float
-    state: str = "waiting"  # waiting | claiming | running | yielded | closed
+    # waiting | claiming | running | yielded | closed | busy (declined: no free capacity yet)
+    state: str = "waiting"
     claim_at: float = 0.0
     start_at: float = 0.0
     epoch: int = 0  # my claim's epoch, 0 = none
     max_epoch: int = 0
     best: tuple[tuple[int, str], str] | None = None  # (precedence, node id) of the best claim
     last_activity: float = 0.0
+    last_request: float = 0.0  # when the submitter last asked for this leg
     last_lease: float = 0.0
     dead: set[str] = field(default_factory=set)
     stop: bool = False
@@ -184,7 +189,9 @@ class CiNode:
         self._peers: dict[str, _Peer] = {}
         self._legs: dict[str, _Leg] = {}
         self._early: dict[str, list[NodeMessage]] = {}
-        self._tokens: set[str] = set()
+        # digest of a request token -> the leg it made ("" until known). A token verifies once
+        # (one-time `jti`), so a repeat is matched by digest and never verified again.
+        self._tokens: dict[str, str] = {}
         self._last_announce = -1e18
         self._stopping = threading.Event()
         self._ticker: threading.Thread | None = None
@@ -265,8 +272,13 @@ class CiNode:
         digest = hashlib.sha256(req.token.encode()).hexdigest()
         with self._lock:
             if digest in self._tokens:
-                return  # the submitter repeats its request until someone answers
-            self._tokens.add(digest)
+                # The submitter repeats its request until someone answers: that also tells a
+                # node that declined the leg for being busy that it is still wanted.
+                known = self._legs.get(self._tokens[digest])
+                if known is not None:
+                    known.last_request = self._clock.monotonic()
+                return
+            self._tokens[digest] = ""
             if len(self._tokens) > 10_000:
                 self._tokens.clear()
         try:
@@ -275,7 +287,7 @@ class CiNode:
             log.info("ignored a CI request: %s", e)
             if str(e).startswith("could not fetch"):
                 with self._lock:
-                    self._tokens.discard(digest)  # the submitter's repeat may succeed
+                    self._tokens.pop(digest, None)  # the submitter's repeat may succeed
             return
         reply_pub, os_name = parsed
         try:
@@ -313,8 +325,9 @@ class CiNode:
             if info.leg_id in self._legs:
                 return
             now = self._clock.monotonic()
-            leg = _Leg(info=info, created=now, last_activity=now)
+            leg = _Leg(info=info, created=now, last_activity=now, last_request=now)
             self._legs[info.leg_id] = leg
+            self._tokens[digest] = info.leg_id
             self._plan_claim(leg, now)
             for early in self._early.pop(info.leg_id, []):
                 self._apply(leg, early, now)
@@ -354,14 +367,29 @@ class CiNode:
             if m.busy >= m.capacity or not self._team.is_member_login(m.proof.login, info.repo):
                 continue
             ids.append(nid)
-        if self._cfg.os_name == info.os and self._busy() < self._cfg.capacity:
+        if self._cfg.os_name == info.os and self._load(leg) < self._cfg.capacity:
             ids.append(self.node_id)
         return sorted(ids, key=lambda n: score(info.leg_id, n))
+
+    def _load(self, besides: _Leg) -> int:
+        """Legs this node is running or about to claim, so that it never over-commits."""
+        return sum(
+            1
+            for leg in self._legs.values()
+            if leg is not besides
+            and (
+                leg.state in ("running", "claiming")
+                or (leg.state == "waiting" and (leg.best is None or leg.best[1] == self.node_id))
+            )
+        )
 
     def _plan_claim(self, leg: _Leg, now: float) -> None:
         order = self._eligible(leg, now)
         if self.node_id not in order:
-            leg.state = "yielded"  # busy: let the others take it
+            # Busy: let the others take it. Not "yielded": a leg nobody takes is planned again
+            # once this node is free (see `_tick_leg`), which is what lets a lone machine serve
+            # the request that arrived while it was busy.
+            leg.state = "busy"
             return
         leg.state = "waiting"
         leg.claim_at = now + order.index(self.node_id) * self._cfg.step_s
@@ -417,7 +445,13 @@ class CiNode:
 
     def _tick_leg(self, leg: _Leg, now: float, to_run: list[_Leg]) -> None:
         cfg = self._cfg
-        if leg.state == "waiting":
+        if leg.state == "busy":
+            # In the order of arrival, one per free slot: planning a leg makes it count as load.
+            # It joins the ranking of the nodes idle now, so it never jumps ahead of them; a claim
+            # of another node that was heard meanwhile (`leg.best`) still stands.
+            if now - leg.last_request <= cfg.request_fresh_s:
+                self._plan_claim(leg, now)
+        elif leg.state == "waiting":
             if leg.best is None or leg.best[1] == self.node_id:
                 if now >= leg.claim_at:
                     self._claim(leg, now)
