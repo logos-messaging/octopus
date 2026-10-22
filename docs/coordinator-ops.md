@@ -164,6 +164,7 @@ are never logged.
 | Jobs stay `queued` | `octopus_runners_online`, `octopus_runner_slots`; runners need the label `octopus` and a matching OS/arch |
 | `octopus_offers_total{outcome="timeout"}` rising | runners offline or behind a broken relay path; check the node's port 60000 is reachable from outside |
 | Container is `unhealthy` | `curl 127.0.0.1:9100/readyz` inside the container for the failing check |
+| Node log shows `Pruning connection due to ip colocation` | more than 5 runners behind one public IP (an office NAT). The node keeps at most 5 peers from one IP, whatever the port, and the library API cannot change that (#84). The other runners still get messages through the fleet nodes; expect them to reconnect often |
 
 ## Wiring for the coordinator service
 
