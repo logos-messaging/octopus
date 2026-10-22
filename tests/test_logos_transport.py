@@ -1,25 +1,17 @@
-import socket
 import threading
 import time
 
 import pytest
+from conftest import node_ports
 
 pytestmark = pytest.mark.needs_lib
 
 TOPIC = "/octopus/1/test/proto"
 
 
-def _free_port(kind: int) -> int:
-    with socket.socket(socket.AF_INET, kind) as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
 def _overrides() -> dict:
     return {
-        "tcp-port": _free_port(socket.SOCK_STREAM),
-        "discv5-udp-port": _free_port(socket.SOCK_DGRAM),
-        "quic-port": _free_port(socket.SOCK_DGRAM),
+        **node_ports(),
         "nat": "none",
         "cluster-id": 4242,
         "num-shards-in-network": 1,

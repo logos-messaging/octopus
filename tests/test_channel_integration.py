@@ -1,12 +1,12 @@
 import base64
 import json
-import socket
 import subprocess
 import sys
 import time
 from pathlib import Path
 
 import pytest
+from conftest import node_ports
 
 from octopus.crypto import PairCipher, derive_channel_key, generate_private_key
 
@@ -16,17 +16,9 @@ TOPIC = "/octopus/1/test-chan/proto"
 CHANNEL = "octopus-test-chan"
 
 
-def _free_port(kind: int) -> int:
-    with socket.socket(socket.AF_INET, kind) as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
 def _overrides() -> dict:
     return {
-        "tcp-port": _free_port(socket.SOCK_STREAM),
-        "discv5-udp-port": _free_port(socket.SOCK_DGRAM),
-        "quic-port": _free_port(socket.SOCK_DGRAM),
+        **node_ports(),
         "nat": "none",
         "cluster-id": 4242,
         "num-shards-in-network": 1,
