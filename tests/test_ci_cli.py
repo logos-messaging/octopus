@@ -580,3 +580,73 @@ def test_a_delegation_file_from_before_one_per_scope_is_still_read(tmp_path):
     assert key == "KEY" and len(texts) == 1 and '"org:acme"' in texts[0]
     (tmp_path / "delegation.json").write_text("{nope")
     assert home.delegate() == ("KEY", [])
+
+
+# logins added by hand stay on the list
+
+SYNC = ["team", "sync"]
+
+
+def _sync(tmp_path, *args):
+    return cli.invoke(app, [*SYNC, *args, "--data-dir", str(tmp_path / "data")])
+
+
+def test_a_login_added_by_hand_is_kept_by_the_next_sync(machine, monkeypatch):
+    tmp_path, key_file, *_ = machine
+    run_init(tmp_path, key_file, answers="y\ny\n")
+    monkeypatch.setattr(Gh, "collaborators", lambda self, repo: ["alice", "dave"])
+    result = _sync(tmp_path, "--repo", "acme/app", "--login", "Octo-Bot")
+    assert result.exit_code == 0, result.output
+    home = Home(tmp_path / "data" / "ci")
+    assert home.extras() == {"repo:acme/app": ["octo-bot"]}
+    (ml,) = [m for m in home.lists() if m.scope == "repo:acme/app"]
+    assert "octo-bot" in ml.logins
+    # a later sync, without --login, as the one the node repeats daily: the bot stays
+    monkeypatch.setattr(Gh, "collaborators", lambda self, repo: ["alice", "dave", "erin"])
+    assert _sync(tmp_path, "--repo", "acme/app").exit_code == 0
+    (ml,) = [m for m in Home(tmp_path / "data" / "ci").lists() if m.scope == "repo:acme/app"]
+    assert "octo-bot" in ml.logins and "erin" in ml.logins
+
+
+def test_the_daily_sync_of_the_node_keeps_the_login_added_by_hand(machine, monkeypatch):
+    tmp_path, key_file, gh, _ = machine
+    run_init(tmp_path, key_file, answers="y\ny\n")
+    monkeypatch.setattr(Gh, "collaborators", lambda self, repo: ["alice", "dave"])
+    assert _sync(tmp_path, "--repo", "acme/app", "--login", "octo-bot").exit_code == 0
+    runtime = make_runtime(tmp_path, gh)
+    monkeypatch.setattr(Gh, "collaborators", lambda self, repo: ["alice", "dave", "frank"])
+    assert runtime.sync_now() is True
+    (ml,) = [m for m in runtime.team.current() if m.scope == "repo:acme/app"]
+    assert "frank" in ml.logins, "the list was renewed"
+    assert "octo-bot" in ml.logins, "and the login added by hand was not dropped"
+
+
+def test_a_login_added_by_hand_only_goes_on_the_scopes_it_was_given_for(machine, monkeypatch):
+    tmp_path, key_file, *_ = machine
+    run_init(tmp_path, key_file, answers="y\ny\n")  # org:acme
+    monkeypatch.setattr(Gh, "collaborators", lambda self, repo: ["alice"])
+    assert _sync(tmp_path, "--repo", "acme/app", "--login", "octo-bot").exit_code == 0
+    assert _sync(tmp_path, "--org", "acme").exit_code == 0
+    by_scope = {m.scope: m.logins for m in Home(tmp_path / "data" / "ci").lists()}
+    assert "octo-bot" in by_scope["repo:acme/app"] and "octo-bot" not in by_scope["org:acme"]
+
+
+def test_forget_login_removes_it_at_that_sync(machine, monkeypatch):
+    tmp_path, key_file, *_ = machine
+    run_init(tmp_path, key_file, answers="y\ny\n")
+    monkeypatch.setattr(Gh, "collaborators", lambda self, repo: ["alice", "dave"])
+    assert _sync(tmp_path, "--repo", "acme/app", "--login", "octo-bot").exit_code == 0
+    assert _sync(tmp_path, "--repo", "acme/app", "--forget-login", "octo-bot").exit_code == 0
+    home = Home(tmp_path / "data" / "ci")
+    assert home.extras() == {}
+    (ml,) = [m for m in home.lists() if m.scope == "repo:acme/app"]
+    assert "octo-bot" not in ml.logins
+
+
+def test_team_show_says_which_logins_were_added_by_hand(machine, monkeypatch):
+    tmp_path, key_file, *_ = machine
+    run_init(tmp_path, key_file, answers="y\ny\n")
+    monkeypatch.setattr(Gh, "collaborators", lambda self, repo: ["alice"])
+    assert _sync(tmp_path, "--repo", "acme/app", "--login", "octo-bot").exit_code == 0
+    out = cli.invoke(app, ["team", "show", "--data-dir", str(tmp_path / "data")]).output
+    assert "added by hand, kept by every sync: octo-bot" in out

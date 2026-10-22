@@ -137,6 +137,21 @@ class Home:
         raw = self._read_json("allow.json") or {}
         return Allow(list(raw.get("repos", [])), list(raw.get("orgs", [])))
 
+    def save_extras(self, extras: dict[str, list[str]]) -> None:
+        """Logins added by hand to a scope (`team sync --login`): every sync keeps them."""
+        kept = {scope: sorted(set(logins)) for scope, logins in extras.items() if logins}
+        self._write("sync-extras.json", json.dumps(kept))
+
+    def extras(self) -> dict[str, list[str]]:
+        raw = self._read_json("sync-extras.json")
+        if not isinstance(raw, dict):
+            return {}
+        return {
+            scope: sorted({str(lg).strip().lower() for lg in logins if str(lg).strip()})
+            for scope, logins in raw.items()
+            if isinstance(logins, list)
+        }
+
     def save_scopes(self, scopes: list[str]) -> None:
         self._write("sync-scopes.json", json.dumps(sorted(set(scopes))))
 
