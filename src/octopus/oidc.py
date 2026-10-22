@@ -49,17 +49,6 @@ class Claims:
     run_id: str
     run_attempt: str
     exp: float
-    sha: str = ""
-    aud: str = ""
-
-
-def unverified_audience(token: str) -> str | None:
-    """The audience a token claims, without trusting it: only to skip tokens meant for others."""
-    try:
-        aud = jwt.decode(token, options={"verify_signature": False}).get("aud")
-    except jwt.PyJWTError:
-        return None
-    return aud if isinstance(aud, str) else None
 
 
 def fetch_jwks(url: str = JWKS_URL) -> dict:
@@ -90,13 +79,8 @@ class OidcVerifier:
         self._fetched_at: float | None = None
         self._seen: dict[str, float] = {}  # jti -> exp (epoch seconds)
 
-    def verify(self, token: str, audience_prefix: str | None = None) -> Claims:
-        """The claims of a valid, unused token. Raises OidcError.
-
-        With `audience_prefix`, any audience that starts with it is accepted, and the full
-        audience comes back in `Claims.aud`: the requester chose it, so GitHub's signature binds
-        whatever it put there (Octopus CI puts the reply key and the OS in it).
-        """
+    def verify(self, token: str) -> Claims:
+        """The claims of a valid, unused token. Raises OidcError."""
         try:
             header = jwt.get_unverified_header(token)
         except jwt.PyJWTError:
@@ -112,13 +96,10 @@ class OidcVerifier:
                 token,
                 key,
                 algorithms=["RS256"],
-                audience=None if audience_prefix is not None else self._audience,
+                audience=self._audience,
                 issuer=self._issuer,
                 leeway=LEEWAY_S,
-                options={
-                    "require": list(_REQUIRED),
-                    "verify_aud": audience_prefix is None,
-                },
+                options={"require": list(_REQUIRED)},
             )
         except jwt.ExpiredSignatureError:
             raise OidcError("token expired") from None
@@ -128,11 +109,6 @@ class OidcVerifier:
             raise OidcError("wrong issuer") from None
         except jwt.PyJWTError:
             raise OidcError("invalid token") from None
-        aud = raw.get("aud")
-        if audience_prefix is not None and not (
-            isinstance(aud, str) and aud.startswith(audience_prefix)
-        ):
-            raise OidcError("wrong audience")
         claims = Claims(
             jti=str(raw["jti"]),
             repository=str(raw["repository"]),
@@ -144,8 +120,6 @@ class OidcVerifier:
             run_id=str(raw.get("run_id", "")),
             run_attempt=str(raw.get("run_attempt", "1")),
             exp=float(raw["exp"]),
-            sha=str(raw.get("sha", "")),
-            aud=aud if isinstance(aud, str) else "",
         )
         self._claim_jti(claims)
         return claims

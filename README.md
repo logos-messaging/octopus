@@ -34,10 +34,9 @@ public runner pool.
 ```
 octopus init                              # guided setup of a runner or coordinator host
 octopus runner setup|allow|start|status|stop   # on runner hosts (laptops)
-octopus ci init owner/repo                # join the team of a repo (docs/decentralized-ci.md)
-octopus init owner/repo                   # register this machine as a GitHub runner, as a service (docs/manual-runner.md)
-octopus init --role manual                 # the same, with questions
+octopus init --role manual                 # plain GitHub runner, one-hour token (docs/manual-runner.md)
 octopus runner unregister-manual <repo>    # remove that runner
+octopus init --role manual --announce      # also offer it to an OIDC-pick coordinator (docs/oidc-pick.md)
 octopus coordinator start|status          # on coordinator hosts (VPS)
 octopus jobs [--failed]                   # list jobs
 octopus logs <job> [-f]                   # job logs
@@ -142,7 +141,6 @@ Run the same checks locally with `ruff check . && pytest`.
 - `docs/e2e.md`: the nightly end-to-end test against a real GitHub repo, and how to set it up
 - `docs/manual-runner.md`: a plain GitHub runner on a laptop, no coordinator
 - `docs/oidc-pick.md`: OIDC pick mode, a coordinator with no GitHub credential
-- `docs/decentralized-ci.md`: team machines run Linux/macOS CI over logos-delivery, no coordinator, no stored token
 - `docs/threat-model.md`: what Octopus protects against and what it does not; `CONTRIBUTING.md`: how to contribute
 
 ## License

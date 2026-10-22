@@ -1,4 +1,4 @@
-"""Run `octopus runner start` (or `run-manual`) as a per-user service: launchd, systemd --user or Task Scheduler.
+"""Run `octopus runner start` as a per-user service: launchd, systemd --user or Task Scheduler.
 
 Rendering is pure; the install and uninstall steps go through an injectable `Run` so tests
 never touch the host's service manager.
@@ -20,20 +20,6 @@ LABEL = "org.logos-messaging.octopus.runner"
 SYSTEMD_UNIT = "octopus-runner.service"
 TASK_NAME = "Octopus Runner"
 
-
-# One service per name: the runner is "runner", a manual GitHub runner is "manual-<slug>".
-def label_for(name: str) -> str:
-    return f"org.logos-messaging.octopus.{name}"
-
-
-def unit_for(name: str) -> str:
-    return f"octopus-{name}.service"
-
-
-def task_for(name: str) -> str:
-    return f"Octopus {name.replace('-', ' ').title()}"
-
-
 # Environment captured at install time: where the native library bindings and the data live.
 PASSTHROUGH_ENV = ("OCTOPUS_BINDINGS", "OCTOPUS_DATA_DIR")
 
@@ -52,7 +38,6 @@ class ServiceSpec:
     # Services start in `/` (launchd) or C:\Windows\System32 (Task Scheduler): give them a
     # directory the user can write, so nothing relative lands in a system directory.
     workdir: str | None = None
-    name: str = "runner"
 
 
 @dataclass(frozen=True)
@@ -86,26 +71,12 @@ def runner_spec(
     return ServiceSpec(argv=tuple(argv), env=env, workdir=workdir)
 
 
-def manual_spec(target_name: str, slug: str, data_dir: Path) -> ServiceSpec:
-    """The service of a manual runner: it runs the GitHub runner and announces it over logos."""
-    argv = [sys.executable, "-m", "octopus", "runner", "run-manual", target_name]
-    env = {"OCTOPUS_DATA_DIR": str(data_dir.expanduser().resolve())}
-    return ServiceSpec(argv=tuple(argv), env=env, workdir=env["OCTOPUS_DATA_DIR"], name=f"manual-{slug}")
-
-
-def ci_spec(data_dir: Path) -> ServiceSpec:
-    """The service of a CI node: one per machine, it serves every repo allowed in its home."""
-    argv = [sys.executable, "-m", "octopus", "ci", "node"]
-    env = {"OCTOPUS_DATA_DIR": str(data_dir.expanduser().resolve())}
-    return ServiceSpec(argv=tuple(argv), env=env, workdir=env["OCTOPUS_DATA_DIR"], name="ci")
-
-
 # rendering
 
 
 def render_launchd(spec: ServiceSpec, log_path: Path) -> str:
     plist: dict = {
-        "Label": label_for(spec.name),
+        "Label": LABEL,
         "ProgramArguments": list(spec.argv),
         "RunAtLoad": True,
         # Restart after a crash or a signal, but not after a clean `runner stop`.
@@ -186,16 +157,16 @@ def render_task_xml(spec: ServiceSpec) -> str:
 # locations
 
 
-def launchd_path(home: Path, name: str = "runner") -> Path:
-    return home / "Library" / "LaunchAgents" / f"{label_for(name)}.plist"
+def launchd_path(home: Path) -> Path:
+    return home / "Library" / "LaunchAgents" / f"{LABEL}.plist"
 
 
-def launchd_log_path(home: Path, name: str = "runner") -> Path:
-    return home / "Library" / "Logs" / "octopus" / f"{name}.log"
+def launchd_log_path(home: Path) -> Path:
+    return home / "Library" / "Logs" / "octopus" / "runner.log"
 
 
-def systemd_path(home: Path, name: str = "runner") -> Path:
-    return home / ".config" / "systemd" / "user" / unit_for(name)
+def systemd_path(home: Path) -> Path:
+    return home / ".config" / "systemd" / "user" / SYSTEMD_UNIT
 
 
 def current_platform() -> str:
@@ -245,12 +216,12 @@ def install(
 
 
 def _install_launchd(spec: ServiceSpec, home: Path, run: Run, uid: int) -> ServiceResult:
-    path = launchd_path(home, spec.name)
-    log = launchd_log_path(home, spec.name)
+    path = launchd_path(home)
+    log = launchd_log_path(home)
     log.parent.mkdir(parents=True, exist_ok=True)
     _atomic_write(path, render_launchd(spec, log))
     domain = f"gui/{uid}"
-    run(["launchctl", "bootout", f"{domain}/{label_for(spec.name)}"])  # not loaded yet is fine
+    run(["launchctl", "bootout", f"{domain}/{LABEL}"])  # not loaded yet is fine
     _check(run(["launchctl", "bootstrap", domain, str(path)]), "could not load the launchd job")
     return ServiceResult(
         path, (f"logs: {log}", "starts at login; `octopus runner stop` leaves it stopped")
@@ -258,15 +229,14 @@ def _install_launchd(spec: ServiceSpec, home: Path, run: Run, uid: int) -> Servi
 
 
 def _install_systemd(spec: ServiceSpec, home: Path, run: Run) -> ServiceResult:
-    path = systemd_path(home, spec.name)
-    unit = unit_for(spec.name)
+    path = systemd_path(home)
     _atomic_write(path, render_systemd(spec))
     _check(run(["systemctl", "--user", "daemon-reload"]), "could not reload systemd")
     _check(
-        run(["systemctl", "--user", "enable", "--now", unit]),
+        run(["systemctl", "--user", "enable", "--now", SYSTEMD_UNIT]),
         "could not enable the systemd unit",
     )
-    notes = [f"logs: journalctl --user -u {unit} -f"]
+    notes = [f"logs: journalctl --user -u {SYSTEMD_UNIT} -f"]
     user = getpass.getuser()
     linger = run(["loginctl", "show-user", user, "-p", "Linger"])
     if linger.returncode != 0 or "Linger=yes" not in linger.stdout:
@@ -277,24 +247,23 @@ def _install_systemd(spec: ServiceSpec, home: Path, run: Run) -> ServiceResult:
 
 
 def _install_task(spec: ServiceSpec, home: Path, run: Run) -> ServiceResult:
-    task = task_for(spec.name)
-    xml_path = home / f".octopus-{spec.name}-task.xml"
+    xml_path = home / ".octopus-runner-task.xml"
     _atomic_write(xml_path, render_task_xml(spec), encoding="utf-16")
     try:
         _check(
-            run(["schtasks", "/Create", "/TN", task, "/XML", str(xml_path), "/F"]),
+            run(["schtasks", "/Create", "/TN", TASK_NAME, "/XML", str(xml_path), "/F"]),
             "could not create the scheduled task",
         )
     finally:
         xml_path.unlink(missing_ok=True)
-    _check(run(["schtasks", "/Run", "/TN", task]), "could not start the scheduled task")
+    _check(run(["schtasks", "/Run", "/TN", TASK_NAME]), "could not start the scheduled task")
     notes = ["starts at logon; a crashed runner is not restarted until the next logon"]
     if spec.env:
         notes.append(
             "environment variables are not passed to a scheduled task: set them for your user "
             f"with setx: {', '.join(sorted(spec.env))}"
         )
-    return ServiceResult(Path(f"Task Scheduler\\{task}"), tuple(notes))
+    return ServiceResult(Path(f"Task Scheduler\\{TASK_NAME}"), tuple(notes))
 
 
 # uninstall
@@ -305,32 +274,24 @@ def uninstall(
     home: Path | None = None,
     run: Run = default_run,
     uid: int | None = None,
-    name: str = "runner",
 ) -> ServiceResult:
     platform = platform or current_platform()
     home = home or Path.home()
     if platform == "darwin":
-        path = launchd_path(home, name)
-        run(
-            [
-                "launchctl",
-                "bootout",
-                f"gui/{os.getuid() if uid is None else uid}/{label_for(name)}",
-            ]
-        )
+        path = launchd_path(home)
+        run(["launchctl", "bootout", f"gui/{os.getuid() if uid is None else uid}/{LABEL}"])
         path.unlink(missing_ok=True)
         return ServiceResult(path)
     if platform == "linux":
-        path = systemd_path(home, name)
-        run(["systemctl", "--user", "disable", "--now", unit_for(name)])
+        path = systemd_path(home)
+        run(["systemctl", "--user", "disable", "--now", SYSTEMD_UNIT])
         path.unlink(missing_ok=True)
         run(["systemctl", "--user", "daemon-reload"])
         return ServiceResult(path)
     if platform == "win32":
-        task = task_for(name)
-        run(["schtasks", "/End", "/TN", task])
-        _check(run(["schtasks", "/Delete", "/TN", task, "/F"]), "could not delete the task")
-        return ServiceResult(Path(f"Task Scheduler\\{task}"))
+        run(["schtasks", "/End", "/TN", TASK_NAME])
+        _check(run(["schtasks", "/Delete", "/TN", TASK_NAME, "/F"]), "could not delete the task")
+        return ServiceResult(Path(f"Task Scheduler\\{TASK_NAME}"))
     raise ServiceError(f"could not uninstall the service, unsupported platform: {platform}")
 
 
@@ -342,23 +303,21 @@ def status(
     home: Path | None = None,
     run: Run = default_run,
     uid: int | None = None,
-    name: str = "runner",
 ) -> tuple[bool, str]:
     """(installed, one-line description)."""
     platform = platform or current_platform()
     home = home or Path.home()
     if platform == "darwin":
-        if not launchd_path(home, name).exists():
+        if not launchd_path(home).exists():
             return False, "not installed"
-        domain = f"gui/{os.getuid() if uid is None else uid}"
-        proc = run(["launchctl", "print", f"{domain}/{label_for(name)}"])
+        proc = run(["launchctl", "print", f"gui/{os.getuid() if uid is None else uid}/{LABEL}"])
         return True, "loaded" if proc.returncode == 0 else "installed, not loaded"
     if platform == "linux":
-        if not systemd_path(home, name).exists():
+        if not systemd_path(home).exists():
             return False, "not installed"
-        proc = run(["systemctl", "--user", "is-active", unit_for(name)])
+        proc = run(["systemctl", "--user", "is-active", SYSTEMD_UNIT])
         return True, (proc.stdout.strip() or "unknown")
     if platform == "win32":
-        proc = run(["schtasks", "/Query", "/TN", task_for(name)])
+        proc = run(["schtasks", "/Query", "/TN", TASK_NAME])
         return (proc.returncode == 0), ("installed" if proc.returncode == 0 else "not installed")
     raise ServiceError(f"could not query the service, unsupported platform: {platform}")

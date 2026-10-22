@@ -195,17 +195,7 @@ def _manual_target():
             typer.echo(f"error: {e}")
 
 
-def _parse_target(text: str):
-    from .agent import manual
-
-    try:
-        return manual.parse_target(text)
-    except manual.ManualRunnerError as e:
-        typer.echo(f"error: {e}")
-        return None
-
-
-def _manual_register(base: Path, target, guided: bool = True) -> tuple[Check, Path | None]:
+def _manual_register(base: Path, target) -> tuple[Check, Path | None]:
     from .agent import manual
     from .cli_manual import ask_token
 
@@ -213,16 +203,12 @@ def _manual_register(base: Path, target, guided: bool = True) -> tuple[Check, Pa
         directory = manual.prepare(base, target)
         if manual.is_configured(directory):
             return Check("registration", Status.OK, f"already registered: {target.url}"), directory
-        raw = _ask("Extra labels, comma separated (empty: only octopus)") if guided else ""
-        name = (
-            _ask("Runner name in GitHub", manual.default_name())
-            if guided
-            else manual.default_name()
-        )
+        raw = _ask("Extra labels, comma separated (empty: only octopus)")
+        name = _ask("Runner name in GitHub", manual.default_name())
         unique = manual.unique_label(name)
         extra = [x.strip() for x in raw.split(",") if x.strip()]
         labels = [*manual.DEFAULT_LABELS, unique, *extra]
-        token = ask_token("registration", target.new_runner_page, manual.TOKEN_ENV, target=target)
+        token = ask_token("registration", target.new_runner_page, manual.TOKEN_ENV)
         manual.configure(directory, target, token, name=name, labels=labels)
         manual.save_label(directory, unique)
     except manual.ManualRunnerError as e:
@@ -231,12 +217,10 @@ def _manual_register(base: Path, target, guided: bool = True) -> tuple[Check, Pa
     return Check("registration", Status.CHANGED, detail), directory
 
 
-def init_manual_runner(
-    data_dir: Path | None, target_text: str | None = None, foreground: bool = False
-) -> list[Check]:
+def init_manual_runner(data_dir: Path | None, announce: bool = False) -> list[Check]:
     """Register this machine as a plain GitHub runner with a one-hour token, then run it."""
     from .agent import manual
-    from .cli_manual import data_dir_or_default, run_manual
+    from .cli_manual import data_dir_or_default
 
     base = data_dir_or_default(data_dir)
     typer.echo(
@@ -244,36 +228,20 @@ def init_manual_runner(
         "trust policy. Any workflow in the target that matches its labels runs on this machine.\n"
         "See docs/manual-runner.md."
     )
-    guided = target_text is None
-    target = _manual_target() if guided else _parse_target(target_text)
+    target = _manual_target()
     if target is None:
-        if not guided:
-            return [_show(Check("target", Status.FAIL, f"could not use: {target_text}"))]
         return [_show(Check("target", Status.SKIPPED, "nothing to register"))]
     checks = [_show(Check("target", Status.OK, target.url))]
-    check, directory = _manual_register(base, target, guided)
+    check, directory = _manual_register(base, target)
     checks.append(_show(check))
     if directory is None:
         return checks
-    label = manual.saved_label(directory)
-    announce = label is not None and _manual_announce_setup(guided)
-    if label is not None:
-        typer.echo(
-            f"Use it in a workflow with: runs-on: [self-hosted, {label}]\n"
-            "  (or let the pick job choose it: docs/oidc-pick.md)"
-        )
-    if guided and not typer.confirm(
-        "Run it now (foreground, Ctrl-C to stop; it stays registered)?", default=True
-    ):
+    if not typer.confirm("Run it now (foreground, Ctrl-C to stop; it stays registered)?", default=True):
         typer.echo("next: run octopus init --role manual again to start it")
         typer.echo(f"      octopus runner unregister-manual {target.name} removes it")
         return checks
-    if not guided and not foreground:
-        checks.append(_show(_manual_service(target, directory, base)))
-        typer.echo(f"next: octopus runner unregister-manual {target.name} removes it")
-        return checks
     try:
-        code = run_manual(directory, base, announce)
+        code = _manual_run(directory, base, announce)
     except manual.ManualRunnerError as e:
         return [*checks, _show(Check("runner", Status.FAIL, str(e)))]
     status = Status.OK if code == 0 else Status.FAIL
@@ -281,78 +249,23 @@ def init_manual_runner(
     return checks
 
 
-def _free_port(preferred: int) -> int:
-    """`preferred` if nothing listens there (a coordinator on this machine may), else a free one."""
-    import socket
+def _manual_run(directory: Path, base: Path, announce: bool) -> int:
+    """Run the runner; with `announce`, also publish its unique label for OIDC pick mode."""
+    from contextlib import ExitStack
 
-    for port in (preferred, 0):
-        with socket.socket() as sock:
+    from .agent import manual, manual_presence
+
+    label = manual.saved_label(directory)
+    if announce and label is None:
+        typer.echo("note: no unique label saved, register the runner again to announce it")
+    with ExitStack() as stack:
+        if announce and label is not None:
             try:
-                sock.bind(("0.0.0.0", port))
-            except OSError:
-                continue
-            return int(sock.getsockname()[1])
-    return preferred
-
-
-def _manual_announce_setup(interactive: bool = True) -> bool:
-    """Whether the runner announces itself over logos-delivery; save what that needs.
-
-    Without questions (`octopus init owner/repo`) it always does, on the shared fleet unless a
-    multiaddr is already saved.
-    """
-    from .agent.config import ConfigError, RunnerConfig, settings_path
-
-    if interactive and not typer.confirm(
-        "Let a coordinator in OIDC pick mode offer this runner (docs/oidc-pick.md)?", default=True
-    ):
-        return False
-    path = settings_path()
-    try:
-        settings = RunnerConfig.load(path)
-    except ConfigError as e:
-        typer.echo(f"error: {e}")
-        return False
-    if interactive and not settings.entry_nodes:
-        typer.echo(
-            "Runners and coordinators find each other through the shared logos fleet. If they do\n"
-            "not meet (the coordinator shows no runner), give the coordinator's multiaddr: the\n"
-            "'multiaddr' line of `octopus coordinator status`."
-        )
-        while True:
-            node = _ask("Coordinator multiaddr, like /ip4/<ip>/tcp/60000/p2p/<id> (empty: shared fleet)")
-            if not node or node.startswith(("/", "enr:", "enrtree:")):
-                break
-            typer.echo("error: a multiaddr starts with / (or enr: / enrtree:)")
-        if node:
-            settings.entry_nodes.append(node)
-    port = _free_port(settings.tcp_port)
-    if port != settings.tcp_port:
-        typer.echo(f"note: port {settings.tcp_port} is in use, this runner's node uses {port}")
-        settings.tcp_port = port
-    try:
-        settings.save(path)
-    except ConfigError as e:
-        typer.echo(f"error: {e}")
-        return False
-    return True
-
-
-def _manual_service(target, directory: Path, base: Path) -> Check:
-    """Run the runner in the background from now on, and at login."""
-    from .agent import service
-
-    try:
-        result = service.install(service.manual_spec(target.name, target.slug, base))
-    except service.ServiceError as e:
-        return Check(
-            "service",
-            Status.FAIL,
-            f"{e}; run it in the foreground instead: octopus init {target.name} --foreground",
-        )
-    for note in result.notes:
-        typer.echo(f"note: {note}")
-    return Check("service", Status.CHANGED, f"installed and started: {result.path}")
+                runner_id = stack.enter_context(manual_presence.announce(label, base))
+                typer.echo(f"announcing label {label} as runner: {runner_id}")
+            except Exception as e:  # noqa: BLE001 - no node library or network: the runner works
+                typer.echo(f"note: could not announce the label: {e}", err=True)
+        return manual.start(directory)
 
 
 # --- coordinator ----------------------------------------------------------------------
@@ -512,38 +425,24 @@ DataDirOption = typer.Option(
     None, "--data-dir", help="Octopus data dir (default: OCTOPUS_DATA_DIR or the platform's)."
 )
 ApiUrlOption = typer.Option("https://api.github.com", "--api-url", help="GitHub API URL.")
-
-
-ForegroundOption = typer.Option(
-    False, "--foreground", help="With a repo argument: run in this terminal, not as a service."
-)
-TargetArgument = typer.Argument(
-    None,
-    help="owner/repo or org: register this machine as a GitHub runner for it, no questions asked.",
+AnnounceOption = typer.Option(
+    False,
+    "--announce",
+    help="Manual role: also announce the runner's unique label to coordinators (OIDC pick mode).",
 )
 
 
 def add_init(app: typer.Typer) -> None:
     @app.command("init")
     def init(
-        target: str | None = TargetArgument,
         role: str = RoleOption,
-        foreground: bool = ForegroundOption,
         config: Path | None = ConfigOption,
         env_file: Path = EnvFileOption,
         data_dir: Path | None = DataDirOption,
         api_url: str = ApiUrlOption,
+        announce: bool = AnnounceOption,
     ) -> None:
-        """Set up this host as a runner or a coordinator, step by step. Safe to run again.
-
-        `octopus init owner/repo` registers this machine as a GitHub runner for that repo and
-        runs it, using your gh login for the one-hour token.
-        """
-        if target is not None:
-            if role not in (None, "manual"):
-                typer.echo("error: a repo or org argument goes with the manual role", err=True)
-                raise typer.Exit(code=2)
-            role = "manual"
+        """Set up this host as a runner or a coordinator, step by step. Safe to run again."""
         while role not in ROLES:
             role = _ask(
                 "Role of this host: runner, coordinator or manual (a plain GitHub runner)"
@@ -551,7 +450,7 @@ def add_init(app: typer.Typer) -> None:
         if role == "runner":
             checks = init_runner(config)
         elif role == "manual":
-            checks = init_manual_runner(data_dir, target, foreground)
+            checks = init_manual_runner(data_dir, announce)
         else:
             checks = init_coordinator(env_file, data_dir, api_url)
         if any(c.failed for c in checks):
