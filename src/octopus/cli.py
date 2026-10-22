@@ -12,6 +12,7 @@ from .cli_init import add_init
 from .cli_keys import add_coordinator_keygen, root_app
 from .cli_lib import lib_app
 from .cli_manual import add_invite, add_manual
+from .process import leave
 
 app = typer.Typer(no_args_is_help=True, help="Octopus: lend your laptop as a CI runner.")
 runner_app = typer.Typer(no_args_is_help=True, help="Commands for runner hosts.")
@@ -306,7 +307,7 @@ def runner_start(
     if running:
         raise _fail(f"already running: pid: {running['pid']}", 1)
 
-    transport = LogosTransport(settings.node_config(data_dir / NODE_DIR))
+    transport = LogosTransport(settings.node_config(data_dir / NODE_DIR), fast_stop=True)
     agent = RunnerAgent(settings, allowlist, transport, data_dir=data_dir)
     try:
         agent.start()
@@ -320,6 +321,7 @@ def runner_start(
     typer.echo(f"runner online: {agent.runner_id} (max jobs: {settings.max_jobs}); Ctrl-C to stop")
     agent.wait()
     typer.echo("runner stopped")
+    leave()
 
 
 @runner_app.command("status")
@@ -459,7 +461,7 @@ def coordinator_start(
     if running:
         raise _fail(f"already running: pid: {running['pid']}", 1)
     github = _github_client(config)
-    transport = LogosTransport(config.node_config(directory / NODE_DIR))
+    transport = LogosTransport(config.node_config(directory / NODE_DIR), fast_stop=True)
     coordinator = Coordinator(config, transport, github, directory)
     try:
         coordinator.start()
@@ -477,6 +479,7 @@ def coordinator_start(
     typer.echo("Ctrl-C to stop")
     coordinator.wait()
     typer.echo("coordinator stopped")
+    leave()
 
 
 @coordinator_app.command("status")

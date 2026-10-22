@@ -56,7 +56,8 @@ def _capture_node_config(monkeypatch) -> list[dict]:
     seen: list[dict] = []
 
     class FakeTransport:
-        def __init__(self, cfg):
+        def __init__(self, cfg, *, fast_stop=False):
+            assert fast_stop  # a long-running command must not wait for the node teardown
             seen.append(cfg)
 
     def fail_start(self, *a, **kw):

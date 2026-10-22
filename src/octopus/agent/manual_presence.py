@@ -37,14 +37,20 @@ def announce(
     factory: TransportFactory | None = None,
     *,
     target: str | None = None,
+    fast_stop: bool = False,
 ) -> Iterator[str]:
     """Publish presence with `label` while the block runs. Yields the runner id.
 
     `target` is the repo (`owner/name`) or org (`owner`) the runner is registered on, so that a
     coordinator in pick mode gives it only jobs of that repo or org.
+
+    With `fast_stop`, leaving the block does not tear the native node down; the caller must end
+    the process with `octopus.process.leave`.
     """
     key = load_or_create_private_key(data_dir / KEY_FILE)
     transport = (factory or default_transport_factory(data_dir))()
+    if fast_stop and hasattr(transport, "fast_stop"):
+        transport.fast_stop = True
     transport.start()
     publisher = PresencePublisher(
         transport,

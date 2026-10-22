@@ -467,9 +467,10 @@ def test_run_manual_announces_the_label_and_runs(fake_runner, monkeypatch):
     seen = []
     real = manual_presence.announce
 
-    def spy(label, base, *, target=None):
+    def spy(label, base, *, target=None, fast_stop=False):
         seen.append((label, target))
-        return real(label, base, target=target)
+        assert fast_stop  # the service must not wait for the native node to tear down
+        return real(label, base, target=target, fast_stop=fast_stop)
 
     monkeypatch.setattr(manual_presence, "announce", spy)
     result = cli.invoke(app, ["runner", "run-manual", "acme/app"])
