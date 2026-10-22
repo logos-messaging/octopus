@@ -38,7 +38,18 @@ WaitOpt = typer.Option(
 BusyWaitOpt = typer.Option(
     240.0, "--busy-wait", help="Seconds to wait for a busy machine of an OS to be free."
 )
-FollowOpt = typer.Option(False, "--follow", help="Print the logs of the legs taken.")
+FollowOpt = typer.Option(
+    False,
+    "--follow",
+    help="Stay until every leg taken ends: print its log, report its result, fall back when "
+    "its machine goes silent.",
+)
+SilentOpt = typer.Option(
+    90.0, "--silent-timeout", help="With --follow: seconds of silence after which a machine is lost."
+)
+MaxRunOpt = typer.Option(
+    5400.0, "--max-run", help="With --follow: seconds to wait for a leg to end before it times out."
+)
 OrgOpt = typer.Option([], "--org", help="Add the members of this organization.")
 RepoOpt = typer.Option([], "--repo", help="Add this repo's collaborators with write access.")
 LoginsOpt = typer.Option([], "--login", help="Add this GitHub login.")
@@ -174,12 +185,16 @@ def ci_submit(
     wait: float = WaitOpt,
     busy_wait: float = BusyWaitOpt,
     follow: bool = FollowOpt,
+    silent_timeout: float = SilentOpt,
+    max_run: float = MaxRunOpt,
 ) -> None:
     """Ask the fleet to run the legs of this workflow run; print what falls back to GitHub.
 
-    Run by the hosted `submit` job of the reusable workflow. It writes `handled` and `unhandled`
-    (JSON lists of OS names) to $GITHUB_OUTPUT. It exits 0 even when nobody answers: that is what
-    the fallback is for.
+    Run by the hosted `submit` job of the reusable workflow. It writes `handled`, `unhandled`
+    and `failed` (JSON lists of OS names) to $GITHUB_OUTPUT. It exits 0 even when nobody answers:
+    that is what the fallback is for. With --follow it stays until every leg taken ends; a leg
+    whose machine went silent joins `unhandled` (it runs on GitHub), and a leg that failed is in
+    `failed` (the workflow fails the job on it).
     """
     from .ci.messages import leg_audience, make_leg_id
     from .ci.submit import Leg, Submitter
@@ -228,21 +243,58 @@ def ci_submit(
         )
         result = submitter.submit(legs)
         if follow and result.handled:
+            for os_name, node in result.handled.items():
+                typer.echo(f"{os_name}: taken by node {node}")
             submitter.follow(
-                result, lambda o, line: typer.echo(f"[{o}] {line}"), timeout_s=6 * 3600
+                result,
+                lambda o, line: typer.echo(f"[{o}] {line}"),
+                timeout_s=max_run,
+                silent_s=silent_timeout,
             )
     except Exception as e:  # noqa: BLE001 - the fleet is down or unreachable: fall back
         typer.echo(f"warning: could not reach the fleet: {type(e).__name__}", err=True)
         _fall_back_all(oses, f"could not reach the fleet ({type(e).__name__})")
         _exit_now()
         return
+    failed = _settle(result)
     for os_name, node in result.handled.items():
-        typer.echo(f"{os_name}: taken by node {node}")
+        if os_name not in result.outcomes:
+            typer.echo(f"{os_name}: taken by node {node}")
+    for os_name, outcome in result.outcomes.items():
+        typer.echo(f"{os_name}: {_describe(outcome)}")
     for os_name in result.unhandled:
-        typer.echo(f"{os_name}: no node took it, falls back to GitHub")
+        typer.echo(f"{os_name}: no node ran it, falls back to GitHub: {result.reasons.get(os_name, '')}")
     _write_summary(render_summary(list(oses), result))
-    _write_outputs(sorted(result.handled), result.unhandled)
+    _write_outputs(sorted(result.handled), result.unhandled, failed)
     _exit_now()
+
+
+FAILED_STATES = ("failure", "error", "timeout")
+
+
+def _settle(result) -> list[str]:
+    """Sort the legs the nodes reported: a lost machine's leg falls back; a failed one fails.
+
+    A `cancelled` leg (its run was superseded) is neither: GitHub already stopped wanting it.
+    """
+    failed = []
+    for os_name, outcome in result.outcomes.items():
+        state = outcome.get("state")
+        if state == "lost":
+            result.handled.pop(os_name, None)
+            result.unhandled.append(os_name)
+            result.reasons[os_name] = str(outcome.get("detail", "the machine was lost"))
+        elif state in FAILED_STATES:
+            failed.append(os_name)
+    return sorted(failed)
+
+
+def _describe(outcome: dict) -> str:
+    state = str(outcome.get("state", "?"))
+    detail = str(outcome.get("detail", ""))
+    exit_code = outcome.get("exit")
+    extra = f" (exit code: {exit_code})" if state in ("failure",) and exit_code not in (None, -1) else ""
+    return f"{state}{extra}" + (f": {detail}" if detail else "")
 
 
 def _exit_now() -> None:
@@ -260,7 +312,7 @@ def _fall_back_all(oses: list[str], reason: str) -> None:
 
     result = SubmitResult(unhandled=list(oses), reasons={o: reason for o in oses})
     _write_summary(render_summary(list(oses), result))
-    _write_outputs([], list(oses))
+    _write_outputs([], list(oses), [])
 
 
 def _write_summary(markdown: str) -> None:
@@ -271,9 +323,13 @@ def _write_summary(markdown: str) -> None:
             f.write(markdown + "\n")
 
 
-def _write_outputs(handled: list[str], unhandled: list[str]) -> None:
+def _write_outputs(handled: list[str], unhandled: list[str], failed: list[str] | None = None) -> None:
     out = os.environ.get("GITHUB_OUTPUT")
-    lines = [f"handled={json.dumps(handled)}", f"unhandled={json.dumps(unhandled)}"]
+    lines = [
+        f"handled={json.dumps(handled)}",
+        f"unhandled={json.dumps(unhandled)}",
+        f"failed={json.dumps(failed or [])}",
+    ]
     if out:
         with open(out, "a") as f:
             f.write("\n".join(lines) + "\n")

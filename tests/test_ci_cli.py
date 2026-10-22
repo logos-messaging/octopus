@@ -414,7 +414,10 @@ def test_the_reusable_workflow_passes_busy_wait_to_submit():
     assert "      busy-wait:\n" in text and "        default: 240\n" in text
     assert "INPUT_BUSY_WAIT: ${{ inputs.busy-wait }}" in text
     assert '--busy-wait "$INPUT_BUSY_WAIT"' in text
-    assert "    timeout-minutes: 15\n" in text  # room for setup, busy-wait and wait
+    assert "    timeout-minutes: 360\n" in text  # the job stays until the legs end
+    assert "--follow" in text and '--max-run "$INPUT_MAX_RUN"' in text
+    assert '--silent-timeout "$INPUT_SILENT"' in text
+    assert "!cancelled() && needs.submit.outputs.unhandled" in text  # fallback after a failed leg
 
 
 def test_ci_status_runs_on_an_empty_home(tmp_path):

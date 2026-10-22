@@ -1,5 +1,8 @@
 # Octopus CI, as a reusable workflow: team machines run the Linux and macOS legs over
 # logos-delivery; whatever no machine takes, and Windows, runs on GitHub-hosted runners.
+# The `submit` job is the coordinator: it stays until every leg a team machine took has ended,
+# streams its log, reports its result in the job summary and fails if the leg failed. A machine
+# that goes silent hands its leg to a hosted runner.
 # See docs/decentralized-ci.md. Call it, pinned to a commit:
 #
 #   jobs:
@@ -32,6 +35,18 @@ on:
           hosted runner. The submit job bills while it waits.
         type: number
         default: 240
+      max-run:
+        description: >-
+          Seconds the submit job waits for a leg a team machine took to end. A leg still running
+          then is reported as timed out and fails the job. The hosted job itself ends after 6 h.
+        type: number
+        default: 5400
+      silent-timeout:
+        description: >-
+          Seconds of silence (no log line, no lease) after which a team machine is taken for lost
+          and its leg runs on a hosted runner instead.
+        type: number
+        default: 90
       team-key:
         description: The team public key. Default is `.octopus/team.pub` of the calling repo.
         type: string
@@ -42,10 +57,10 @@ permissions:
 
 jobs:
   submit:
-    # Cheap (Linux): it only asks the fleet, waits for busy machines and reports what nobody took.
+    # Cheap (Linux): it asks the fleet, then stays until the legs taken end (up to `max-run`).
+    # It bills while it waits on a private repo; public repos have free minutes.
     runs-on: ubuntu-latest
-    # Setup (~2 min) + the longest wait (`busy-wait` 240 s, then `wait` 45 s) fit with margin.
-    timeout-minutes: 15
+    timeout-minutes: 360
     permissions:
       id-token: write
       contents: read
@@ -78,6 +93,8 @@ jobs:
           INPUT_OS: ${{ inputs.os }}
           INPUT_WAIT: ${{ inputs.wait }}
           INPUT_BUSY_WAIT: ${{ inputs.busy-wait }}
+          INPUT_MAX_RUN: ${{ inputs.max-run }}
+          INPUT_SILENT: ${{ inputs.silent-timeout }}
           INPUT_TEAM_KEY: ${{ inputs.team-key }}
         run: |
           test -n "$OCTOPUS_REF"
@@ -89,7 +106,8 @@ jobs:
             args+=(--os "$os")
           done
           octopus ci submit "${args[@]}" --team-key "$team_key" --wait "$INPUT_WAIT" \
-            --busy-wait "$INPUT_BUSY_WAIT"
+            --busy-wait "$INPUT_BUSY_WAIT" --follow --max-run "$INPUT_MAX_RUN" \
+            --silent-timeout "$INPUT_SILENT"
       - id: result
         if: always()
         env:
@@ -98,11 +116,20 @@ jobs:
         run: |
           # Nothing reported: everything falls back.
           echo "unhandled=${SUBMITTED:-$INPUT_OS}" >> "$GITHUB_OUTPUT"
+      - name: A leg on a team machine failed
+        # The submit job is the check that gates: it fails when a leg a team machine ran failed.
+        if: always() && steps.submit.outputs.failed != '' && steps.submit.outputs.failed != '[]'
+        env:
+          FAILED: ${{ steps.submit.outputs.failed }}
+        run: |
+          echo "::error::failed on a team machine: $FAILED (the log above has its output)"
+          exit 1
 
   fallback:
     # The legs no team machine took.
     needs: submit
-    if: needs.submit.outputs.unhandled != '[]'
+    # Also when submit failed because a team leg failed: the other legs still need their runs.
+    if: ${{ !cancelled() && needs.submit.outputs.unhandled != '[]' }}
     strategy:
       fail-fast: false
       matrix:
