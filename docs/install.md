@@ -20,6 +20,16 @@ The script also runs `octopus lib install`, which fetches the prebuilt native li
 
 Maintainers publish the library by running the "Release liblogosdelivery" workflow with `publish` ticked (Linux x86_64 and macOS arm64). It is built from the logos-delivery commit pinned by the bindings.
 
+## Update
+
+```bash
+octopus update            # latest release, native library, and restart of the installed services
+octopus update --check    # only say if a newer release exists (exit code 10 if it does)
+octopus update --ref main # a tag, branch or commit instead of the latest release
+```
+
+It installs the same way you did (`pipx`, `uv tool`, or the private virtualenv of the install script), refreshes the library with `octopus lib install` (`--no-lib` skips it), and restarts every Octopus service of your user, such as the CI node, the runner and manual runners (`--no-restart` skips it), because a running service keeps the old code until it restarts. A development install (`pip install -e`) is not touched: use `git pull`. On Windows, rerun `install.ps1`.
+
 ## Configure
 
 ```bash

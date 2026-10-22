@@ -378,3 +378,46 @@ def status(
         proc = run(["schtasks", "/Query", "/TN", task_for(name)])
         return (proc.returncode == 0), ("installed" if proc.returncode == 0 else "not installed")
     raise ServiceError(f"could not query the service, unsupported platform: {platform}")
+
+
+def installed_names(platform: str | None = None, home: Path | None = None) -> list[str]:
+    """The names of the Octopus services installed for this user (runner, ci, manual-...)."""
+    platform = platform or current_platform()
+    home = home or Path.home()
+    if platform == "darwin":
+        prefix = label_for("")
+        folder, suffix = home / "Library" / "LaunchAgents", ".plist"
+    elif platform == "linux":
+        prefix = unit_for("").removesuffix(".service")
+        folder, suffix = home / ".config" / "systemd" / "user", ".service"
+    else:
+        return []
+    names = []
+    for path in sorted(folder.glob(f"{prefix}*{suffix}")) if folder.is_dir() else []:
+        name = path.name[len(prefix) : -len(suffix)]
+        if name:
+            names.append(name)
+    return names
+
+
+def restart(
+    name: str,
+    platform: str | None = None,
+    run: Run = default_run,
+    uid: int | None = None,
+) -> None:
+    """Restart an installed service so that it runs the code on disk now."""
+    platform = platform or current_platform()
+    if platform == "darwin":
+        domain = f"gui/{os.getuid() if uid is None else uid}"
+        _check(
+            run(["launchctl", "kickstart", "-k", f"{domain}/{label_for(name)}"]),
+            f"could not restart the launchd job: {name}",
+        )
+    elif platform == "linux":
+        _check(
+            run(["systemctl", "--user", "restart", unit_for(name)]),
+            f"could not restart the systemd unit: {name}",
+        )
+    else:
+        raise ServiceError(f"could not restart the service, unsupported platform: {platform}")

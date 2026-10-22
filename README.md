@@ -91,7 +91,7 @@ alternative and the inspection commands: [docs/coordinator.md](docs/coordinator.
 
 ## Install
 
-See [docs/install.md](docs/install.md): one-line install, `octopus lib install` for the native library, and `octopus runner install-service` to start at login.
+See [docs/install.md](docs/install.md): one-line install, `octopus lib install` for the native library, and `octopus runner install-service` to start at login. Update with `octopus update`.
 
 ## Develop
 
