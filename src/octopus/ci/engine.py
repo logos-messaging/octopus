@@ -449,6 +449,7 @@ class CiNode:
     def _run(self, leg: _Leg) -> None:
         info = leg.info
         chan = channel_id(info.leg_id, self.node_id)
+        log.info("CI leg started: %s at %s", info.leg_id, info.sha)
         send = self._open_reply_channel(leg, chan)
         state, detail, code = "error", "", -1
         try:
@@ -466,6 +467,7 @@ class CiNode:
         with self._lock:
             fenced = leg.stop
             leg.state = "yielded" if fenced else "closed"
+        log.info("CI leg finished: %s: %s%s", info.leg_id, state, " (fenced)" if fenced else "")
         if not fenced:
             try:
                 self._status.post(info, state, detail or state)

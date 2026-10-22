@@ -97,6 +97,7 @@ def ci_node(
     data_dir: Path | None = DataDirOpt,
 ) -> None:
     """Run this machine as a CI node (what the service runs)."""
+    import logging
     import signal
     import threading
 
@@ -106,6 +107,7 @@ def ci_node(
     from .ci.wizard import os_name
     from .transport.logos import LogosError, LogosLibraryError, LogosTransport
 
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s")
     home = ci_home(data_dir)
     try:
         settings = RunnerConfig.load(settings_path())
