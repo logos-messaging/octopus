@@ -30,7 +30,7 @@ def build(issuer, runners=("a",)):
         ).tick()
     service = PickService(
         OidcVerifier(AUDIENCE, fetch=issuer.jwks),
-        Picker(registry),
+        Picker(registry, allowed_labels=[f"octopus-{n}" for n in runners]),
         TrustPolicy(allowed_repos=frozenset({"acme/app"})),
     )
     server = WebhookServer(
@@ -156,10 +156,22 @@ BASE = {
 
 def test_audience_turns_on_pick_mode_without_a_github_credential():
     cfg = CoordinatorConfig.from_env(
-        {**BASE, "OCTOPUS_OIDC_AUDIENCE": AUDIENCE}
+        {**BASE, "OCTOPUS_OIDC_AUDIENCE": AUDIENCE, "OCTOPUS_PICK_LABELS": "octopus-a"}
     )
     assert cfg.auth_mode == "oidc"
     assert cfg.pick_enabled and cfg.oidc_audience == AUDIENCE
+
+
+def test_pick_mode_needs_the_runner_labels():
+    with pytest.raises(ConfigError, match="OCTOPUS_PICK_LABELS"):
+        CoordinatorConfig.from_env({**BASE, "OCTOPUS_OIDC_AUDIENCE": AUDIENCE})
+
+
+def test_a_pick_label_must_have_the_octopus_prefix():
+    with pytest.raises(ConfigError, match="invalid pick label"):
+        CoordinatorConfig.from_env(
+            {**BASE, "OCTOPUS_OIDC_AUDIENCE": AUDIENCE, "OCTOPUS_PICK_LABELS": "laptop"}
+        )
 
 
 def test_credentials_still_required_without_pick_mode():
@@ -180,6 +192,7 @@ def test_coordinator_in_pick_mode_end_to_end(issuer, tmp_path, monkeypatch):
         {
             **BASE,
             "OCTOPUS_OIDC_AUDIENCE": AUDIENCE,
+            "OCTOPUS_PICK_LABELS": "octopus-a",
             "OCTOPUS_WEBHOOK_LISTEN": "127.0.0.1:0",
         }
     )

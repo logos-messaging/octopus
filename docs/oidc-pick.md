@@ -20,6 +20,7 @@ that only GitHub and the coordinator know; it lets the coordinator hear that a j
 
 ```
 OCTOPUS_OIDC_AUDIENCE=https://octopus.example.org   # turns pick mode on; the pick job asks for this audience
+OCTOPUS_PICK_LABELS=octopus-lap,octopus-desk        # the unique labels of the runners you registered
 OCTOPUS_ALLOWED_REPOS=acme/app                      # or OCTOPUS_ALLOWED_ORGS
 OCTOPUS_WEBHOOK_SECRET=...                          # workflow_job webhooks release reservations
 OCTOPUS_PUBLIC_IP=203.0.113.5
@@ -110,6 +111,10 @@ See also [threat-model.md](threat-model.md), "OIDC pick mode".
   "who can push to the allowed repos", exactly as for any self-hosted runner.
 - The coordinator tracks busy runners by its own reservations, not by what the runner
   reports (a plain runner does not know). A job sent to a runner by other means is invisible.
+- Presence is not signed, so any peer can announce any label. The coordinator gives out only the
+  labels in `OCTOPUS_PICK_LABELS`, so a forged presence cannot send a job to a label that no
+  registered runner has. A forged presence for an allowed label can still make that runner look
+  free: the job then waits in GitHub's queue until that runner takes it.
 
 ## Not covered here
 

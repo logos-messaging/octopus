@@ -31,6 +31,7 @@ def make(names=("a", "b"), **kw):
         info = RunnerInfo(f"id-{n}", "linux", "x64", ("octopus", f"octopus-{n}"))
         pubs[n] = PresencePublisher(MemoryTransport(bus), info)
         pubs[n].tick()
+    kw.setdefault("allowed_labels", [f"octopus-{n}" for n in names])
     return clock, registry, pubs, Picker(registry, clock, **kw)
 
 
@@ -75,7 +76,26 @@ def test_runner_without_unique_label_or_offline_is_skipped():
     )
     gone.tick()
     gone.stop()
-    assert Picker(registry, clock).pick("acme/app", "1") is None
+    assert Picker(registry, clock, allowed_labels=["octopus-y"]).pick("acme/app", "1") is None
+
+
+def test_a_label_not_on_the_allowlist_is_never_given_out():
+    # Presence is not signed: any peer can announce a label that no registered runner has (#80).
+    bus = MemoryBus()
+    clock = Clock()
+    registry = Registry(MemoryTransport(bus), clock)
+    registry.start()
+    for runner_id, label in (("id-a", "octopus-a"), ("forged", "octopus-forged")):
+        info = RunnerInfo(runner_id, "linux", "x64", (label,))
+        PresencePublisher(MemoryTransport(bus), info).tick()
+    picker = Picker(registry, clock, allowed_labels=["octopus-a"])
+    assert picker.pick("acme/app", "1").label == "octopus-a"
+    assert picker.pick("acme/app", "2") is None  # the forged label is not taken instead
+
+
+def test_allowed_labels_compare_case_insensitively():
+    _, _, _, picker = make(("a",), allowed_labels=["Octopus-A"])
+    assert picker.pick("acme/app", "1").label == "octopus-a"
 
 
 def test_busy_runner_is_skipped():

@@ -153,7 +153,7 @@ class Coordinator:
                 self._start_scheduling(key, signing_key, policy)
             pick = None
             if self._config.pick_enabled:
-                self.picker = Picker(self.registry)
+                self.picker = Picker(self.registry, allowed_labels=self._config.pick_labels)
                 pick = PickService(
                     OidcVerifier(self._config.oidc_audience),
                     self.picker,
