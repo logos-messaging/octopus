@@ -175,7 +175,7 @@ def _sync_team(home: Home, gh: Gh, target: manual.Target, now: float) -> Check:
         return Check("team", Status.SKIPPED, "nobody added")
     try:
         key = load_team_key(home.team_key_path, passphrase("Team key passphrase"))
-        ml = build_list(gh, scope, key, now)
+        ml = build_list(gh, scope, key, now, extra=home.extras().get(scope))
         delegate = generate_signing_key()
         every_scope = sorted({*home.scopes(), scope})
         # a delegation names one scope and one delegated key: renew all of them with the new key

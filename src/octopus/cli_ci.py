@@ -52,7 +52,12 @@ MaxRunOpt = typer.Option(
 )
 OrgOpt = typer.Option([], "--org", help="Add the members of this organization.")
 RepoOpt = typer.Option([], "--repo", help="Add this repo's collaborators with write access.")
-LoginsOpt = typer.Option([], "--login", help="Add this GitHub login.")
+LoginsOpt = typer.Option(
+    [], "--login", help="Add this GitHub login to these scopes, now and in every later sync."
+)
+ForgetLoginOpt = typer.Option(
+    [], "--forget-login", help="Stop adding this login to these scopes (it leaves at this sync)."
+)
 ForceOpt = typer.Option(False, "--force", help="Accept a list that shrinks sharply.")
 
 
@@ -387,10 +392,15 @@ def team_sync(
     org: list[str] = OrgOpt,
     repo: list[str] = RepoOpt,
     login: list[str] = LoginsOpt,
+    forget_login: list[str] = ForgetLoginOpt,
     force: bool = ForceOpt,
     data_dir: Path | None = DataDirOpt,
 ) -> None:
-    """Rebuild the signed member lists from GitHub (admins). The node repeats this daily."""
+    """Rebuild the signed member lists from GitHub (admins). The node repeats this daily.
+
+    Logins given with --login stay on the list of their scopes in every later sync, also the
+    daily one, until --forget-login removes them.
+    """
     from .ci.gh import Gh
     from .ci.wizard import passphrase
     from .crypto import generate_signing_key
@@ -411,10 +421,14 @@ def team_sync(
     lists = {ml.scope: ml for ml in home.lists()}
     gh = Gh()
     delegate = generate_signing_key()
+    extras = home.extras()
+    added = {lg.strip().lower() for lg in login if lg.strip()}
+    dropped = {lg.strip().lower() for lg in forget_login if lg.strip()}
     for scope in scopes:
+        extras[scope] = sorted(({*extras.get(scope, []), *added}) - dropped)
         try:
             ml = build_list(
-                gh, scope, key, now, previous=lists.get(scope), extra=login, force=force
+                gh, scope, key, now, previous=lists.get(scope), extra=extras[scope], force=force
             )
         except TeamError as e:
             raise _fail(str(e), 1) from e
@@ -431,6 +445,7 @@ def team_sync(
         raise _fail(str(e), 1) from e
     home.save_delegate(key_to_text(delegate), delegations)
     home.save_lists(list(lists.values()))
+    home.save_extras(extras)
     home.save_scopes(every_scope)
 
 
@@ -442,8 +457,11 @@ def team_show(data_dir: Path | None = DataDirOpt) -> None:
     if not lists:
         typer.echo("no member list")
         raise typer.Exit(code=1)
+    extras = home.extras()
     for ml in lists:
         typer.echo(f"{ml.scope} (version {ml.version}): {', '.join(ml.logins)}")
+        if extras.get(ml.scope):
+            typer.echo(f"  added by hand, kept by every sync: {', '.join(extras[ml.scope])}")
 
 
 sandbox_app = typer.Typer(

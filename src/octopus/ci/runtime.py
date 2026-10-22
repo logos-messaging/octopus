@@ -157,6 +157,7 @@ class CiRuntime:
         if delegations and min(d.not_after for d in delegations.values()) - now < DELEGATION_WARN_S:
             log.warning("the sync delegation ends soon: run: octopus team sync")
         done = False
+        extras = self.home.extras()
         for scope in scopes:
             delegation = delegations.get(scope)
             if delegation is None:
@@ -165,7 +166,13 @@ class CiRuntime:
             previous = next((ml for ml in self.team.current() if ml.scope == scope), None)
             try:
                 ml = build_list(
-                    self._gh, scope, signer, now, previous=previous, delegation=delegation
+                    self._gh,
+                    scope,
+                    signer,
+                    now,
+                    previous=previous,
+                    delegation=delegation,
+                    extra=extras.get(scope),
                 )
             except TeamError as e:
                 log.warning("sync of a scope failed, keeping the previous list: %s", e)
