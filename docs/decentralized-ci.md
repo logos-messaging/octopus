@@ -116,11 +116,20 @@ Findings that changed the code:
   without stopping the node.
 - The library download is fast (3 to 8 s), not the 270 MB wait that was feared.
 
+## First end-to-end run (2026-10-22, `octopus-scratch`, real GitHub OIDC)
+
+A push ran the reusable workflow from the pushed branch commit. The hosted `submit` job read its
+workflow commit from its OIDC token, installed Octopus and the library, and asked the fleet for
+`linux` and `macos`. The laptop (a macOS node installed by `octopus ci init`, running as a
+launchd service) verified the real token against GitHub's keys, claimed the macOS leg, cloned the
+commit, ran `.octopus/ci.sh`, and posted `octopus/ci (macos)` pending, then success, as its
+owner. (`github.job_workflow_sha` is empty in a reusable workflow, so the job reads
+`job_workflow_sha` from its own OIDC token.) There is no Linux node, so that leg fell back to a hosted runner, and Windows ran hosted.
+The submit job took about 2 minutes, most of it waiting for the Linux leg: the submitter now gives
+up on an OS with no idle node online after about 12 s.
+
 ## Not verified
 
-- Real GitHub OIDC tokens through the full chain, and the reusable workflow itself (the spike
-  used a plain workflow). Found on the first real run: `github.job_workflow_sha` is empty in a
-  reusable workflow, so the job reads `job_workflow_sha` from its own OIDC token instead.
 - Several team machines and a real fleet under load; a takeover with real laptops sleeping.
 - Speed and cost of a real pipeline: nothing is compared with a hosted run yet.
 - Windows nodes, RSA SSH keys, a sandbox for jobs, membership removal before the next sync.

@@ -54,6 +54,7 @@ class Submitter:
         wait_s: float = 45.0,
         list_wait_s: float = 10.0,
         repeat_s: float = 3.0,
+        discover_s: float = 12.0,
         sleep: Callable[[float], None] = time.sleep,
         monotonic: Callable[[], float] = time.monotonic,
         pump: Callable[[], None] | None = None,
@@ -63,6 +64,10 @@ class Submitter:
         self._wait_s = wait_s
         self._list_wait_s = list_wait_s
         self._repeat_s = repeat_s
+        # Nodes announce every 10 s: after this long, an OS with no idle node online is given up.
+        self._discover_s = discover_s
+        self._idle_os: set[str] = set()
+        self._given_up: set[str] = set()
         self._sleep = sleep
         self._mono = monotonic
         self._pump = pump or (lambda: None)
@@ -73,6 +78,7 @@ class Submitter:
         """Ask the fleet for every leg; the legs nobody takes in time come back as unhandled."""
         self._legs = {leg.leg_id: leg for leg in legs}
         self._result = SubmitResult()
+        self._idle_os, self._given_up = set(), set()
         self._transport.subscribe(CI_TOPIC, self._on_message)
         try:
             if self._wait_for_team():
@@ -100,15 +106,26 @@ class Submitter:
     def _request_until_taken(self, legs: list[Leg]) -> None:
         start = self._mono()
         last = -1e18
-        while len(self._result.handled) < len(legs) and self._mono() - start < self._wait_s:
+        while self._waiting(legs) and self._mono() - start < self._wait_s:
+            if self._mono() - start >= self._discover_s:
+                for leg in legs:
+                    if leg.os not in self._idle_os and leg.os not in self._result.handled:
+                        self._given_up.add(leg.os)
             if self._mono() - last >= self._repeat_s:
                 last = self._mono()
-                for leg in legs:
+                for leg in self._waiting(legs):
                     if leg.os not in self._result.handled:
                         payload = json.dumps({"kind": "request", "token": leg.token})
                         self._transport.publish(CI_TOPIC, payload.encode())
             self._pump()
             self._sleep(0.2)
+
+    def _waiting(self, legs: list[Leg]) -> list[Leg]:
+        return [
+            leg
+            for leg in legs
+            if leg.os not in self._result.handled and leg.os not in self._given_up
+        ]
 
     def _on_message(self, _topic: str, payload: bytes) -> None:
         if len(payload) > MAX_CI_BYTES:
@@ -118,10 +135,14 @@ class Submitter:
             if isinstance(raw, dict) and raw.get("kind") == "list":
                 self._team.accept_list(ListMsg.model_validate(raw).list)
                 return
-            if not isinstance(raw, dict) or raw.get("kind") not in ("lease", "done"):
+            if not isinstance(raw, dict) or raw.get("kind") not in ("announce", "lease", "done"):
                 return
             msg = NodeMessage.model_validate(raw)
         except (ValueError, ValidationError):
+            return
+        if msg.kind == "announce":
+            if msg.busy < msg.capacity and valid_node_message(msg, self._team):
+                self._idle_os.add(msg.os)
             return
         leg = self._legs.get(msg.leg_id)
         if leg is None or leg.os in self._result.handled:
