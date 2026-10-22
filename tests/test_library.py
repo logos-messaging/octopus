@@ -135,7 +135,7 @@ def test_pyproject_pins_the_same_bindings_commit_as_the_submodule():
         ).stdout.strip()
     except (OSError, subprocess.CalledProcessError):
         pytest.skip("not a git checkout")
-    assert f"logos-delivery-python-bindings@{sha}" in (root / "pyproject.toml").read_text()
+    assert f"logos-delivery-python-bindings/archive/{sha}.tar.gz" in (root / "pyproject.toml").read_text()
 
 
 def test_download_enforces_the_limit_and_keeps_no_partial_file(tmp_path, linux, monkeypatch):

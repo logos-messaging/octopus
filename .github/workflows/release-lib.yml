@@ -65,6 +65,14 @@ jobs:
           make build-deps
           make DISABLE_RLN=true liblogosdelivery
 
+      # The build keeps its debug information: 279 MB on Linux, 68 MB without it. The exported
+      # symbols stay.
+      - name: Strip the debug information
+        run: |
+          lib="vendor/logos-delivery-python-bindings/vendor/logos-delivery/build/${{ matrix.built }}"
+          if [ "$RUNNER_OS" = "macOS" ]; then strip -S "$lib"; else strip --strip-debug "$lib"; fi
+          ls -l "$lib"
+
       - name: Name the asset
         run: cp "vendor/logos-delivery-python-bindings/vendor/logos-delivery/build/${{ matrix.built }}" "${{ matrix.asset }}"
 

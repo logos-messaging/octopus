@@ -6,7 +6,8 @@
 $ErrorActionPreference = "Stop"
 
 $ref = if ($env:OCTOPUS_REF) { $env:OCTOPUS_REF } else { "main" }
-$spec = "octopus[logos] @ git+https://github.com/logos-messaging/octopus@$ref"
+# An archive, not git+: pip would clone every submodule, recursively.
+$spec = "octopus[logos] @ https://github.com/logos-messaging/octopus/archive/$ref.tar.gz"
 
 $python = $null
 foreach ($candidate in @("py", "python3", "python")) {
