@@ -29,7 +29,11 @@ NOW = 1_700_000_000.0
 class FakeGh:
     """Answers the `gh api` calls the wizard makes."""
 
-    def __init__(self, *, admin=True, org=True, members=("alice", "bob", "carol"), team_pub=None):
+    def __init__(
+        self, *, admin=True, org=True, members=("alice", "bob", "carol"), team_pub=None,
+        logged_in=True,
+    ):
+        self.logged_in = logged_in
         self.admin = admin
         self.org = org
         self.members = list(members)
@@ -43,6 +47,8 @@ class FakeGh:
         def ok(out):
             return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
 
+        if not self.logged_in:
+            return subprocess.CompletedProcess(argv, 4, stdout="", stderr="gh auth login")
         if ".permissions.admin" in text:
             return ok("true\n" if self.admin else "false\n")
         if "user/memberships/orgs" in text:
@@ -189,6 +195,16 @@ def test_a_member_without_a_team_in_the_repo_is_told_to_ask_an_admin(machine):
     result = run_init(tmp_path, key_file)
     assert result.exit_code == 1
     assert "ask an admin" in result.output
+
+
+def test_without_a_gh_login_the_user_is_told_to_log_in_not_to_ask_an_admin(machine):
+    tmp_path, key_file, gh, _ = machine
+    gh.logged_in = False
+    result = run_init(tmp_path, key_file)
+    assert result.exit_code == 1
+    assert "gh auth login" in result.output
+    assert "team.pub" not in result.output and "ask an admin" not in result.output
+    assert not (tmp_path / "data" / "ci").exists()
 
 
 def test_no_ssh_key_is_a_clear_failure(machine):
