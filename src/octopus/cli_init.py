@@ -215,7 +215,7 @@ def _manual_register(base: Path, target, guided: bool = True) -> tuple[Check, Pa
     from .cli_manual import ask_token
 
     try:
-        directory = manual.prepare(base, target)
+        directory = manual.runner_dir(base, target)
         if manual.is_configured(directory):
             return Check("registration", Status.OK, f"already registered: {target.url}"), directory
         raw = _ask("Extra labels, comma separated (empty: only octopus)") if guided else ""
@@ -227,7 +227,10 @@ def _manual_register(base: Path, target, guided: bool = True) -> tuple[Check, Pa
         unique = manual.unique_label(name)
         extra = [x.strip() for x in raw.split(",") if x.strip()]
         labels = [*manual.DEFAULT_LABELS, unique, *extra]
+        # The token first: the runner download is large (hundreds of MB), and without a token it
+        # would be for nothing (#91). The token lasts an hour, which covers the download.
         token = ask_token("registration", target.new_runner_page, manual.TOKEN_ENV, target=target)
+        directory = manual.prepare(base, target)
         manual.configure(directory, target, token, name=name, labels=labels)
         manual.save_label(directory, unique)
     except manual.ManualRunnerError as e:

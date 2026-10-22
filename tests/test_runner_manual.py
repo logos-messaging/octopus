@@ -510,3 +510,28 @@ def test_the_invited_teammate_registers_with_the_token_alone(fake_runner, monkey
     result = init_repo()
     assert result.exit_code == 0, result.output
     assert (runner_tree(fake_runner) / "config.token").read_text() == TOKEN
+
+
+def test_no_token_fails_at_once_and_downloads_nothing(fake_runner, monkeypatch):
+    # No gh login, no OCTOPUS_REGISTRATION_TOKEN, no terminal: nothing to paste (#91).
+    monkeypatch.setattr(
+        manual, "ensure_installed", lambda *a, **k: pytest.fail("no download without a token")
+    )
+    result = cli.invoke(app, ["init", "acme/app"], input="")
+    assert result.exit_code == 1
+    assert "gh auth login" in result.output
+    assert "octopus invite acme/app" in result.output
+    assert "Aborted" not in result.output
+    assert not (fake_runner / "data" / "manual-runner").exists()
+
+
+def test_the_token_comes_before_the_download(fake_runner, monkeypatch):
+    order = []
+    real_prepare = manual.prepare
+    monkeypatch.setattr(cli_manual, "gh_token", lambda kind, target: order.append("token") or TOKEN)
+    monkeypatch.setattr(
+        manual, "prepare", lambda *a, **k: order.append("download") or real_prepare(*a, **k)
+    )
+    result = init_repo()
+    assert result.exit_code == 0, result.output
+    assert order == ["token", "download"]

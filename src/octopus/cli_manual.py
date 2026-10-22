@@ -82,11 +82,25 @@ def ask_token(
             where
             or "  2. in the Configure box, copy the value after --token in the ./config.sh line"
         )
-        token = str(typer.prompt(f"Paste the {what} token (input is hidden)", hide_input=True))
+        try:
+            token = str(typer.prompt(f"Paste the {what} token (input is hidden)", hide_input=True))
+        except typer.Abort:
+            # No input: no terminal and nothing piped in. Say what to do, not just "Aborted".
+            raise manual.ManualRunnerError(_no_token_hint(what, target)) from None
         token = token.strip()
     if not token:
         raise manual.ManualRunnerError(f"no {what} token given")
     return token
+
+
+def _no_token_hint(what: str, target: manual.Target | None) -> str:
+    name = target.name if target is not None else "owner/repo"
+    if what != "registration":
+        return f"no {what} token: run gh auth login (you need admin rights on {name}), then try again"
+    return (
+        f"no {what} token: run gh auth login (you need admin rights on {name}), "
+        f"or ask an admin to run: octopus invite {name}"
+    )
 
 
 def run_manual(
