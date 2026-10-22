@@ -2,6 +2,7 @@
 
 import json
 import time
+import uuid
 
 import jwt
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -38,7 +39,7 @@ class FakeIssuer:
             "iat": now,
             "nbf": now,
             "exp": now + 300,
-            "jti": f"jti-{time.monotonic_ns()}",
+            "jti": f"jti-{uuid.uuid4().hex}",
             "sub": "repo:acme/app:ref:refs/heads/main",
             "repository": "acme/app",
             "repository_owner": "acme",
