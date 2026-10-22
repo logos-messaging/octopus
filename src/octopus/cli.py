@@ -12,6 +12,7 @@ from .cli_init import add_init
 from .cli_keys import add_coordinator_keygen, root_app
 from .cli_lib import lib_app
 from .cli_manual import add_invite, add_manual
+from .cli_update import add_update
 from .process import leave
 
 app = typer.Typer(no_args_is_help=True, help="Octopus: lend your laptop as a CI runner.")
@@ -25,6 +26,7 @@ app.add_typer(lib_app, name="lib")
 add_coordinator_keygen(coordinator_app)
 add_init(app)
 add_manual(runner_app)
+add_update(app)
 add_invite(app)
 add_ci(app)
 
