@@ -155,6 +155,24 @@ sees **only the checkout**, mounted at `/work`:
 own `.octopus/ci.sh`, Python and `make`). Nothing is cached between jobs. A job with the network on
 can still send the checkout out of the machine, but the checkout holds no credentials.
 
+**What the network gives a job.** With the default network (`bridge`), a job in the container
+can reach more than the internet:
+- **services of the host**, through the container gateway (for Docker `172.17.0.1`): every service
+  that listens on `0.0.0.0`, including this node's own port;
+- on a **cloud VPS, the metadata service** at `169.254.169.254`: if the instance has a role or a
+  service account, a job can read its credentials from there.
+
+`octopus ci sandbox enable` warns about it. Use `--network none` for a job that needs no network,
+or block both. For example, with rootful Docker (a sketch: check it on your host and your
+firewall before relying on it):
+
+```bash
+iptables -I DOCKER-USER -d 169.254.169.254 -j DROP           # the metadata service
+iptables -I INPUT -i docker0 -m conntrack --ctstate NEW -j DROP   # containers to host services
+```
+
+Where possible, make the node and any local service listen on `127.0.0.1` only.
+
 Limits: Linux hosts only. A `macos` leg needs a macOS VM (for example Tart), which is not built:
 `enable` refuses on macOS, and a node with a sandbox configured on another OS fails the leg with
 exit code 126 rather than running it unprotected. This is container isolation (shared kernel), not

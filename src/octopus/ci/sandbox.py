@@ -61,6 +61,17 @@ class Sandbox:
             return "only Linux hosts can sandbox jobs for now; macOS jobs need a VM"
         return None
 
+    def network_warning(self) -> str | None:
+        """What a job can reach through the container network, or None when it has none."""
+        if self.network == "none":
+            return None
+        return (
+            f"with network {self.network} a job can reach services of this host (through the "
+            "container gateway, including this node's own port) and, on a cloud VPS, the metadata "
+            "service at 169.254.169.254 (instance credentials). Block them, or use --network none "
+            "if the job needs no network: see docs/decentralized-ci.md"
+        )
+
     def run_argv(self, name: str, work: str, script: str, env: dict[str, str]) -> list[str]:
         """The command that runs `script` (a path below `work`) in the container."""
         argv = [

@@ -416,6 +416,9 @@ def sandbox_enable(
             raise _fail(f"could not pull the image: exit code: {done.returncode}", 4)
     _home(data_dir).save_sandbox(sandbox)
     typer.echo(f"jobs now run in {sandbox.image} ({sandbox.runtime}, network {sandbox.network})")
+    network_warning = sandbox.network_warning()
+    if network_warning:
+        typer.echo(f"warning: {network_warning}", err=True)
     typer.echo("restart the node for it to take effect: octopus runner install-service")
 
 

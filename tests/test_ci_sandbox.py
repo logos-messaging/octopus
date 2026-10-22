@@ -216,3 +216,21 @@ def test_cli_enable_refuses_bad_input_and_other_hosts(tmp_path, fake_docker, mon
     monkeypatch.setattr("octopus.ci.sandbox.sys.platform", "darwin")
     out = cli.invoke(app, ["ci", "sandbox", "enable", "--image", "ubuntu", "--data-dir", data])
     assert out.exit_code == 3 and "macOS" in out.output
+
+
+def test_a_network_other_than_none_is_warned_about():
+    warning = Sandbox(image="python:3.12-slim").network_warning()
+    assert warning and "169.254.169.254" in warning and "--network none" in warning
+    assert Sandbox(image="python:3.12-slim", network="none").network_warning() is None
+
+
+@posix_only
+def test_cli_enable_warns_about_the_network_unless_there_is_none(tmp_path, fake_docker):
+    data = str(tmp_path / "data")
+    out = cli.invoke(app, ["ci", "sandbox", "enable", "--image", "python:3.12-slim", "--data-dir", data])
+    assert out.exit_code == 0 and "169.254.169.254" in out.output
+    out = cli.invoke(
+        app,
+        ["ci", "sandbox", "enable", "--image", "python:3.12-slim", "--network", "none", "--data-dir", data],
+    )
+    assert out.exit_code == 0 and "169.254.169.254" not in out.output
