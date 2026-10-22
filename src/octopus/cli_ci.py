@@ -134,7 +134,7 @@ def ci_node(
     except ConfigError as e:
         raise _fail(str(e), 3) from e
     try:
-        node_config = settings.node_config(home.node_dir)
+        node_config = settings.node_config(home.node_dir, backfill=False)
     except ValueError as e:  # e.g. an invalid OCTOPUS_LOG_LEVEL
         raise _fail(str(e), 3) from e
     transport = LogosTransport(node_config, fast_stop=True)
@@ -241,7 +241,7 @@ def ci_submit(
         level = DEFAULT_LOG_LEVEL
     try:
         transport = LogosTransport(
-            {**runner_config(entry_nodes=entry_node, log_level=level), "mode": "Edge"}
+            {**runner_config(entry_nodes=entry_node, log_level=level, backfill=False), "mode": "Edge"}
         )
         transport.start()
         submitter = Submitter(

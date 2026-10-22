@@ -42,6 +42,7 @@ def _base(
     nat: str | None,
     storage_path: Path | None,
     log_level: str | None = None,
+    backfill: bool = True,
 ) -> dict:
     # The level only filters in a library built with chronicles runtime filtering, as the
     # release and CI builds are (.github/actions/liblogosdelivery).
@@ -50,6 +51,10 @@ def _base(
         overrides["entry-node"] = list(entry_nodes)
     if nat:
         overrides["nat"] = nat
+    if not backfill:
+        # Without it a node that never ran before (a hosted submit job is a new one every run)
+        # replays the last 24 hours of every topic from the Store. See `runner_config`.
+        overrides["backfill-enabled"] = False
     if storage_path is not None:
         # The node keeps the state of its reliable channels (SDS) there. The library's
         # default is ./data in the working dir, which two processes can share.
@@ -82,14 +87,22 @@ def runner_config(
     nat: str | None = None,
     storage_path: Path | None = None,
     log_level: str | None = None,
+    backfill: bool = True,
 ) -> dict:
     """A runner dials out, so a plain NAT works. `entry_nodes` are extra connections, added to the default fleet nodes.
 
     `nat` is e.g. "any" to try UPnP/NAT-PMP. The default is "none": the library's own
     default is "any", and its port-mapping service often crashes the node when it stops
     (#64). A runner does not need a port mapping, because the coordinators relay for it.
+
+    `backfill=False` turns off the library's catch-up from the Store (`backfill-enabled`). Octopus
+    CI does not use history: lists and requests are published again and on request. Left on, a
+    node with no earlier run replays 24 hours of the CI topic (about 10 000 messages, a minute of
+    work and log) before it can answer.
     """
-    return _base(tcp_port, entry_nodes, nat or RUNNER_DEFAULT_NAT, storage_path, log_level)
+    return _base(
+        tcp_port, entry_nodes, nat or RUNNER_DEFAULT_NAT, storage_path, log_level, backfill
+    )
 
 
 def from_env(role: str, env: Mapping[str, str] | None = None) -> dict:

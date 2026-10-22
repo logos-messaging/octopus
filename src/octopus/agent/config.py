@@ -99,9 +99,13 @@ class RunnerConfig:
     def trusted_coordinators(self) -> dict[str, str]:
         return {coordinator_id(k): k for k in self.coordinators}
 
-    def node_config(self, storage_path: Path | None = None) -> dict:
+    def node_config(self, storage_path: Path | None = None, *, backfill: bool = True) -> dict:
         return runner_config(
-            self.entry_nodes, tcp_port=self.tcp_port, nat=self.nat, storage_path=storage_path
+            self.entry_nodes,
+            tcp_port=self.tcp_port,
+            nat=self.nat,
+            storage_path=storage_path,
+            backfill=backfill,
         )
 
     @classmethod

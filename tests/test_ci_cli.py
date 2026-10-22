@@ -414,6 +414,45 @@ def test_submit_passes_the_wait_limits_to_the_submitter(tmp_path, monkeypatch):
     assert seen == {"wait_s": 30.0, "busy_wait_s": 120.0}
 
 
+def test_the_ci_nodes_do_not_replay_the_store(monkeypatch, tmp_path):
+    """The submit job and `ci node` turn the library's Store catch-up off (about 10 000 messages)."""
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "out"))
+    monkeypatch.setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "https://example.invalid/?x=1")
+    monkeypatch.setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "t")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "acme/app")
+    monkeypatch.setattr(cli_ci, "_mint_token", lambda url, tok, aud: "token-for-" + aud)
+    monkeypatch.setattr(cli_ci, "_exit_now", lambda: None)
+    seen = []
+
+    class Up:
+        def __init__(self, cfg, **_kw):
+            seen.append(cfg["messagingOverrides"].get("backfill-enabled"))
+
+        def start(self):
+            pass
+
+    class Quick:
+        def __init__(self, transport, team, **kw):
+            pass
+
+        def submit(self, legs):
+            from octopus.ci.submit import SubmitResult
+
+            return SubmitResult(unhandled=[leg.os for leg in legs])
+
+    monkeypatch.setattr("octopus.transport.logos.LogosTransport", Up)
+    monkeypatch.setattr("octopus.ci.submit.Submitter", Quick)
+    args = ["ci", "submit", "--os", "macos", "--team-key", "A" * 43]
+    assert cli.invoke(app, args).exit_code == 0
+    assert seen == [False]
+    from octopus.agent.config import RunnerConfig
+
+    assert RunnerConfig().node_config(tmp_path, backfill=False)["messagingOverrides"][
+        "backfill-enabled"
+    ] is False
+    assert "backfill-enabled" not in RunnerConfig().node_config(tmp_path)["messagingOverrides"]
+
+
 def test_the_reusable_workflow_passes_busy_wait_to_submit():
     path = Path(__file__).parent.parent / ".github/workflows/octopus-ci.yml"
     text = path.read_text()

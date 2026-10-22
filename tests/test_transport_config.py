@@ -31,6 +31,13 @@ def test_runner_has_no_port_mapping_unless_asked():
     assert config.from_env("runner", {})["messagingOverrides"]["nat"] == "none"
 
 
+def test_backfill_is_on_unless_a_node_turns_it_off():
+    # Left on, a node with no earlier run replays 24 hours of every topic from the Store.
+    assert "backfill-enabled" not in config.runner_config()["messagingOverrides"]
+    assert config.runner_config(backfill=False)["messagingOverrides"]["backfill-enabled"] is False
+    assert "backfill-enabled" not in config.coordinator_config("1.2.3.4")["messagingOverrides"]
+
+
 def test_from_env():
     env = {"OCTOPUS_ENTRY_NODES": " /a , /b ", "OCTOPUS_NAT": "any", "OCTOPUS_TCP_PORT": "61000"}
     o = config.from_env("runner", env)["messagingOverrides"]
