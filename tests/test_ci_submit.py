@@ -273,7 +273,9 @@ def test_a_pull_request_status_goes_on_the_pr_head_not_the_merge_commit(tmp_path
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="fake gh is a shell script")
-def test_a_pull_request_status_falls_back_to_the_token_commit_if_the_parents_are_unknown(tmp_path):
+def test_a_pull_request_status_falls_back_to_the_token_commit_if_the_parents_are_unknown(
+    tmp_path, caplog
+):
     out = tmp_path / "args.txt"
     gh = tmp_path / "gh"
     gh.write_text(
@@ -287,5 +289,72 @@ def test_a_pull_request_status_falls_back_to_the_token_commit_if_the_parents_are
     from dataclasses import replace
 
     pr = replace(leg_info(REPO, "MERGESHA", "macos"), event="pull_request")
-    GhStatusPoster(str(gh)).post(pr, "success", "ok")
+    with caplog.at_level("WARNING", logger="octopus.ci.exec"):
+        GhStatusPoster(str(gh)).post(pr, "success", "ok")
     assert f"repos/{REPO}/statuses/MERGESHA" in out.read_text().split("\n")
+    assert "could not find the PR head" in caplog.text  # the fallback leaves a trace
+
+
+# visibility: the machine's name, the reasons, the job summary
+
+
+def test_statuses_say_which_machine_ran_the_leg(world):
+    alice = world.add("alice")
+    world.settle()
+    _, payload, _ = world.request()
+    world.publish(payload)
+    world.advance(5)
+    assert alice.status.descriptions == ["running on alice (linux)", "success on alice"]
+
+
+def test_a_failed_leg_says_why_in_its_status(world):
+    alice = world.add("alice")
+    alice.executor.exit_code = 3
+    world.settle()
+    _, payload, _ = world.request()
+    world.publish(payload)
+    world.advance(5)
+    assert alice.status.descriptions[-1] == "failure on alice"
+
+
+def test_the_result_names_the_machine_and_explains_each_fallback(world):
+    world.add("bob", "macos")
+    world.settle()
+    sub, _ = make_submitter(world, wait_s=45)
+    result = sub.submit(legs_for(world, "linux", "macos"))
+    assert result.names == {"macos": "bob"}
+    assert result.reasons == {"linux": "no idle team machine of this OS was online"}
+
+
+def test_the_reason_is_a_timeout_when_an_idle_machine_never_answers(world):
+    alice = world.add("alice")
+    world.settle()
+    alice.node._on_request = lambda _req: None  # it announces itself idle, but takes nothing
+    sub, _ = make_submitter(world, wait_s=30)
+    result = sub.submit(legs_for(world, "linux"))
+    assert result.reasons == {"linux": "no machine took it within 30 s"}
+
+
+def test_the_reason_is_the_missing_member_list_when_the_fleet_is_silent(world):
+    sub, _ = make_submitter(world, list_wait_s=3)
+    result = sub.submit(legs_for(world, "linux"))
+    assert "no member list" in result.reasons["linux"]
+
+
+def test_the_summary_table_lists_each_leg_and_cleans_names_from_remote_machines():
+    from octopus.ci.submit import SubmitResult
+    from octopus.ci.summary import render
+
+    result = SubmitResult(
+        handled={"macos": "jqf7sjhugxa7j7ux"},
+        names={"macos": "evil|name\n`<script>`"},
+        unhandled=["linux"],
+        reasons={"linux": "no idle team machine of this OS was online"},
+    )
+    text = render(["linux", "macos"], result)
+    rows = [ln for ln in text.splitlines() if ln.startswith("| ")]
+    assert len(rows) == 4  # header, separator, two legs: a name cannot add rows or cells
+    assert all(ln.count("|") == 4 for ln in rows)
+    assert "GitHub-hosted runner" in text and "no idle team machine" in text
+    assert "`<" not in text and "script" in text and "node `jqf7sjhugxa7" in text
+    assert "evilname" in text

@@ -84,6 +84,8 @@ class NodeMessage(BaseModel):
     epoch: int = 0
     # done: success | failure | error
     state: str = ""
+    # The machine's name, for display only: it is not authenticated beyond the node's signature.
+    name: str = ""
     sig: str = ""
 
     def signing_bytes(self) -> bytes:

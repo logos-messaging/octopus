@@ -74,6 +74,7 @@ class CiConfig:
     workflow_pin: str = OFFICIAL_WORKFLOW
     os_name: str = "linux"
     arch: str = "x64"
+    name: str = ""  # shown in commit statuses and job summaries
     capacity: int = 1
     grace_s: float = 1.0  # a claim is held this long before running
     step_s: float = 2.0  # each rank waits this much longer to claim
@@ -453,7 +454,7 @@ class CiNode:
         send = self._open_reply_channel(leg, chan)
         state, detail, code = "error", "", -1
         try:
-            self._status.post(info, "pending", "running on a team machine")
+            self._status.post(info, "pending", f"running on {self._machine()} ({info.os})")
             result = self._executor.run(
                 info,
                 lambda line: send({"t": "log", "line": line[:MAX_LINE_BYTES]}),
@@ -470,7 +471,9 @@ class CiNode:
         log.info("CI leg finished: %s: %s%s", info.leg_id, state, " (fenced)" if fenced else "")
         if not fenced:
             try:
-                self._status.post(info, state, detail or state)
+                self._status.post(
+                    info, state, f"{state} on {self._machine()}" + (f": {detail}" if detail else "")
+                )
             except Exception:
                 log.exception("could not post the commit status: %s", info.leg_id)
             send({"t": "result", "state": state, "exit": code, "detail": detail})
@@ -480,6 +483,9 @@ class CiNode:
             self._flush()
         with self._lock:
             leg.done_at = self._clock.monotonic()
+
+    def _machine(self) -> str:
+        return self._cfg.name or "a team machine"
 
     def _open_reply_channel(self, leg: _Leg, chan: str) -> Callable[[dict], None]:
         info = leg.info
@@ -550,6 +556,7 @@ class CiNode:
             arch=self._cfg.arch,
             busy=self._busy(),
             capacity=self._cfg.capacity,
+            name=self._cfg.name,
             **fields,  # type: ignore[arg-type]
         )
         return msg.model_copy(update={"sig": sign(self._sign_key, msg.signing_bytes())})
