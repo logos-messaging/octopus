@@ -234,3 +234,30 @@ def test_cli_enable_warns_about_the_network_unless_there_is_none(tmp_path, fake_
         ["ci", "sandbox", "enable", "--image", "python:3.12-slim", "--network", "none", "--data-dir", data],
     )
     assert out.exit_code == 0 and "169.254.169.254" not in out.output
+
+
+@posix_only
+def test_the_docker_group_is_warned_about_only_for_docker(monkeypatch):
+    import grp
+
+    class FakeGroup:
+        gr_gid = 4242
+
+    monkeypatch.setattr(grp, "getgrnam", lambda name: FakeGroup())
+    monkeypatch.setattr("os.getgroups", lambda: [20, 4242])
+    warning = Sandbox(image="python:3.12-slim").group_warning()
+    assert warning and "root on the host" in warning and "rootless" in warning
+    assert Sandbox(image="python:3.12-slim", runtime="podman").group_warning() is None
+    monkeypatch.setattr("os.getgroups", lambda: [20])
+    assert Sandbox(image="python:3.12-slim").group_warning() is None
+
+
+@posix_only
+def test_no_docker_group_on_the_host_means_no_warning(monkeypatch):
+    import grp
+
+    def missing(name):
+        raise KeyError(name)
+
+    monkeypatch.setattr(grp, "getgrnam", missing)
+    assert Sandbox(image="python:3.12-slim").group_warning() is None

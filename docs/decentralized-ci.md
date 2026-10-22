@@ -155,6 +155,14 @@ sees **only the checkout**, mounted at `/work`:
 own `.octopus/ci.sh`, Python and `make`). Nothing is cached between jobs. A job with the network on
 can still send the checkout out of the machine, but the checkout holds no credentials.
 
+**Which runtime.** Prefer **rootless Podman** (or rootless Docker) for the node's user. To run
+`docker run` with rootful Docker, that user must be in the `docker` group, and anyone in it is
+root on the host (`docker run -v /:/host ...`; the job cannot do that, because the socket is not
+mounted in its container). That makes the dedicated user of a VPS node root-equivalent and
+removes the separation it is there for. `enable` warns when it sees it. Rootless Podman keeps the
+node's user unprivileged, and by default (as far as I know) does not give containers the host's
+loopback.
+
 **What the network gives a job.** With the default network (`bridge`), a job in the container
 can reach more than the internet:
 - **services of the host**, through the container gateway (for Docker `172.17.0.1`): every service

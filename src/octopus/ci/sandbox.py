@@ -72,6 +72,24 @@ class Sandbox:
             "if the job needs no network: see docs/decentralized-ci.md"
         )
 
+    def group_warning(self) -> str | None:
+        """Rootful Docker makes its group root on the host: say so when this user is in it."""
+        if self.runtime != "docker":
+            return None
+        try:
+            import grp
+
+            docker_gid = grp.getgrnam("docker").gr_gid
+        except (ImportError, KeyError):
+            return None
+        if docker_gid not in os.getgroups():
+            return None
+        return (
+            "this user is in the docker group, which is root on the host "
+            "(docker run -v /:/host ...): the dedicated user stops being a boundary. Use rootless "
+            "Podman or rootless Docker for the node's user: see docs/decentralized-ci.md"
+        )
+
     def run_argv(self, name: str, work: str, script: str, env: dict[str, str]) -> list[str]:
         """The command that runs `script` (a path below `work`) in the container."""
         argv = [
