@@ -514,3 +514,69 @@ def test_an_existing_sandbox_is_kept_and_not_asked_again(machine, linux_with_pod
     assert result.exit_code == 0, result.output
     assert not linux_with_podman, "no second prompt"
     assert "jobs run in python:3.12-slim" in result.output
+
+
+# one delegation per scope
+
+
+def _delegations(home):
+    from octopus.team import Delegation
+
+    key, texts = home.delegate()
+    return key, {d.scope: d for d in (Delegation.model_validate_json(t) for t in texts)}
+
+
+def test_a_sync_renews_a_delegation_for_every_scope_with_one_delegated_key(machine, monkeypatch):
+    tmp_path, key_file, *_ = machine
+    run_init(tmp_path, key_file, answers="y\ny\n")  # admin: org:acme is synced daily
+    monkeypatch.setattr(Gh, "collaborators", lambda self, repo: ["alice", "dave"])
+    result = cli.invoke(
+        app, ["team", "sync", "--repo", "acme/app", "--data-dir", str(tmp_path / "data")]
+    )
+    assert result.exit_code == 0, result.output
+    home = Home(tmp_path / "data" / "ci")
+    assert home.scopes() == ["org:acme", "repo:acme/app"]
+    _key, by_scope = _delegations(home)
+    assert sorted(by_scope) == ["org:acme", "repo:acme/app"], "the older scope is renewed too"
+    assert len({d.delegate_pub for d in by_scope.values()}) == 1, "all for the saved key"
+
+
+def test_the_daily_sync_renews_every_scope_not_only_the_last_synced(machine, monkeypatch):
+    tmp_path, key_file, gh, _ = machine
+    run_init(tmp_path, key_file, answers="y\ny\n")
+    monkeypatch.setattr(Gh, "collaborators", lambda self, repo: ["alice", "dave"])
+    assert cli.invoke(
+        app, ["team", "sync", "--repo", "acme/app", "--data-dir", str(tmp_path / "data")]
+    ).exit_code == 0
+    runtime = make_runtime(tmp_path, gh)
+    before = {ml.scope: ml.version for ml in runtime.team.current()}
+    assert set(before) == {"org:acme", "repo:acme/app"}
+    gh.members = ["alice", "bob", "carol", "erin"]
+    monkeypatch.setattr(Gh, "collaborators", lambda self, repo: ["alice", "dave", "frank"])
+    assert runtime.sync_now() is True
+    after = {ml.scope: ml for ml in runtime.team.current()}
+    assert after["org:acme"].version > before["org:acme"] and "erin" in after["org:acme"].logins
+    assert after["repo:acme/app"].version > before["repo:acme/app"]
+    assert "frank" in after["repo:acme/app"].logins, "the scope that is not the last one works"
+
+
+def test_a_scope_without_a_delegation_is_skipped_with_a_warning(machine, caplog):
+    tmp_path, key_file, gh, _ = machine
+    run_init(tmp_path, key_file, answers="y\ny\n")
+    home = Home(tmp_path / "data" / "ci")
+    home.save_scopes([*home.scopes(), "repo:acme/other"])  # no delegation for it
+    runtime = make_runtime(tmp_path, gh)
+    gh.members = ["alice", "bob", "carol", "erin"]
+    with caplog.at_level("WARNING"):
+        assert runtime.sync_now() is True  # org:acme still renewed
+    assert "no delegation for repo:acme/other" in caplog.text
+
+
+def test_a_delegation_file_from_before_one_per_scope_is_still_read(tmp_path):
+    home = Home(tmp_path)
+    home.save_delegate("KEY", ['{"scope": "org:acme"}'])
+    (tmp_path / "delegation.json").write_text('{"scope": "org:acme"}')  # the old single object
+    key, texts = home.delegate()
+    assert key == "KEY" and len(texts) == 1 and '"org:acme"' in texts[0]
+    (tmp_path / "delegation.json").write_text("{nope")
+    assert home.delegate() == ("KEY", [])

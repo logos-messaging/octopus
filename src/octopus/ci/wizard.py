@@ -177,12 +177,17 @@ def _sync_team(home: Home, gh: Gh, target: manual.Target, now: float) -> Check:
         key = load_team_key(home.team_key_path, passphrase("Team key passphrase"))
         ml = build_list(gh, scope, key, now)
         delegate = generate_signing_key()
-        delegation = issue_delegation(key, delegate.public_key(), scope, now + DELEGATION_TTL_S)
+        every_scope = sorted({*home.scopes(), scope})
+        # a delegation names one scope and one delegated key: renew all of them with the new key
+        delegations = [
+            issue_delegation(key, delegate.public_key(), s, now + DELEGATION_TTL_S).model_dump_json()
+            for s in every_scope
+        ]
     except (KeyFileError, TeamError) as e:
         return Check("team", Status.FAIL, str(e))
     home.save_lists([*[x for x in home.lists() if x.scope != scope], ml])
-    home.save_scopes([*home.scopes(), scope])
-    home.save_delegate(key_to_text(delegate), delegation.model_dump_json())
+    home.save_scopes(every_scope)
+    home.save_delegate(key_to_text(delegate), delegations)
     return Check("team", Status.CHANGED, f"{len(ml.logins)} members from {scope}; synced daily")
 
 

@@ -416,14 +416,22 @@ def team_sync(
             ml = build_list(
                 gh, scope, key, now, previous=lists.get(scope), extra=login, force=force
             )
-            delegation = issue_delegation(key, delegate.public_key(), scope, now + DELEGATION_TTL_S)
         except TeamError as e:
             raise _fail(str(e), 1) from e
         lists[scope] = ml
         typer.echo(f"{scope}: {len(ml.logins)} members (version {ml.version})")
-        home.save_delegate(key_to_text(delegate), delegation.model_dump_json())
+    every_scope = sorted({*home.scopes(), *scopes})
+    try:
+        # a delegation names one scope and one delegated key: renew all of them with the new key
+        delegations = [
+            issue_delegation(key, delegate.public_key(), s, now + DELEGATION_TTL_S).model_dump_json()
+            for s in every_scope
+        ]
+    except TeamError as e:
+        raise _fail(str(e), 1) from e
+    home.save_delegate(key_to_text(delegate), delegations)
     home.save_lists(list(lists.values()))
-    home.save_scopes(sorted({*home.scopes(), *scopes}))
+    home.save_scopes(every_scope)
 
 
 @team_app.command("show")
