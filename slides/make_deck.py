@@ -219,12 +219,12 @@ bullets(s, 6.9, 1.7, 6.0, 5.0, [
 # 6. Demo --------------------------------------------------------------------------------------
 s = new_slide("Live demo", "Demo")
 steps = [
-    ("1", "Re-run all jobs", "a fresh CI run of this repo starts on GitHub"),
+    ("1", "a CI run of this repo", "a finished run, or Re-run all jobs on GitHub"),
     ("2", "submit job joins the fleet", "publishes one request per leg on Logos Delivery"),
-    ("3", "linux: taken by node …", "our Linux team machine claims the leg"),
-    ("4", "[linux] …", "the test output streams back over Logos Delivery"),
+    ("3", "taken by node …", "a team machine (our server or Ivan's Mac) claims a leg"),
+    ("4", "[linux] / [macos] …", "the test output streams back over Logos Delivery"),
     ("5", "995 passed", "the full test suite ran on the team machine"),
-    ("6", "job summary", "Linux: team machine · macOS, Windows: GitHub-hosted fallback"),
+    ("6", "job summary", "each leg: a team machine, or the GitHub-hosted fallback"),
 ]
 for i, (n, cmd, what) in enumerate(steps):
     y = 1.65 + i * 0.85
