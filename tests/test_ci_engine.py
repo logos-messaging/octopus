@@ -345,16 +345,14 @@ def test_the_machine_takes_the_next_leg_after_stopping_a_stale_one(world):
     a = world.add("alice", hold=True)
     world.settle()
     first, _ = start_held_leg(world, a, run_id="1")
-    _, payload, _ = world.request(run_id="2")
+    second, payload, _ = world.request(run_id="2")
     world.publish(payload)
     world.advance(5)
-    assert len(a.held) == 1, "busy with the first: the second waits for another node"
+    assert len(a.held) == 1, "busy with the first: the second waits for a free node"
     a.probe.reasons[first] = "the run was cancelled"
     world.advance(10)
-    assert a.node.busy() == 0
-    _, payload, _ = world.request(run_id="3")
-    world.publish(payload)
-    world.advance(5)
+    assert a.node.leg_state(first) == "closed"
+    assert a.node.leg_state(second) == "running", "the waiting leg takes the freed machine"
     assert len(a.held) == 2 and a.node.busy() == 1
 
 
