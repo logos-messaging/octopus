@@ -7,6 +7,7 @@ pipx or uv install.
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import importlib.util
 import os
@@ -25,8 +26,9 @@ RELEASE_REPO = "logos-messaging/octopus"
 # Moving release the library workflow keeps up to date with the pinned bindings.
 DEFAULT_TAG = "lib-latest"
 SUMS_ASSET = "SHA256SUMS"
-# The Linux build of the release workflow is about 270 MB. The download goes to disk in chunks,
-# so a high limit costs no memory.
+# The release workflow publishes each library stripped (about 60 MB on Linux) and gzipped
+# (`<asset>.gz`, about 23 MB); older releases hold only the plain asset, which was about 270 MB. The
+# download goes to disk in chunks, so a high limit costs no memory. It also bounds the unpacked size.
 MAX_LIBRARY_BYTES = 1024 * 1024 * 1024
 MAX_SUMS_BYTES = 64 * 1024
 
@@ -135,6 +137,20 @@ def _get(client: httpx.Client, url: str, limit: int) -> bytes:
     return bytes(data)
 
 
+def _gunzip(src: Path, dst: Path, limit: int) -> None:
+    """Unpack `src` to `dst` in chunks; refuse a body that unpacks to more than `limit`."""
+    size = 0
+    try:
+        with gzip.open(src, "rb") as zin, dst.open("wb") as out:
+            while chunk := zin.read(1024 * 1024):
+                size += len(chunk)
+                if size > limit:
+                    raise LibraryError(f"could not unpack: {src.name}: larger than {limit} bytes")
+                out.write(chunk)
+    except (OSError, EOFError) as e:
+        raise LibraryError(f"could not unpack: {src.name}: {e}") from e
+
+
 def parse_sums(text: str) -> dict[str, str]:
     sums: dict[str, str] = {}
     for line in text.splitlines():
@@ -150,17 +166,24 @@ def download(
     client: httpx.Client | None = None,
     base_url: str | None = None,
 ) -> Path:
-    """Fetch this platform's library from the Octopus release and verify its SHA-256."""
+    """Fetch this platform's library from the Octopus release and verify its SHA-256.
+
+    A release that lists `<asset>.gz` is read from that (smaller); otherwise from the plain asset.
+    The checksum is the one of the file as published.
+    """
     asset = asset_name()
     base = base_url or f"https://github.com/{RELEASE_REPO}/releases/download/{tag}"
     own = client is None
     client = client or httpx.Client(timeout=60.0)
     out = Path(dest_dir or tempfile.mkdtemp(prefix="octopus-lib-")) / asset
     part = out.with_name(out.name + ".part")
+    unpacked = out.with_name(out.name + ".unpacked")
     digest = hashlib.sha256()
     try:
         sums_text = _get(client, f"{base}/{SUMS_ASSET}", MAX_SUMS_BYTES)
-        expected = parse_sums(sums_text.decode("utf-8", "replace")).get(asset)
+        sums = parse_sums(sums_text.decode("utf-8", "replace"))
+        published = f"{asset}.gz" if f"{asset}.gz" in sums else asset
+        expected = sums.get(published)
         if expected is None:
             raise LibraryError(
                 f"the release has no library for this platform, release: {tag}: asset: {asset}: "
@@ -172,15 +195,20 @@ def download(
                 digest.update(chunk)
                 f.write(chunk)
 
-            _stream(client, f"{base}/{asset}", sink, MAX_LIBRARY_BYTES)
+            _stream(client, f"{base}/{published}", sink, MAX_LIBRARY_BYTES)
         actual = digest.hexdigest()
         if actual != expected:
             raise LibraryError(
-                f"checksum mismatch: asset: {asset}: expected: {expected}: got: {actual}"
+                f"checksum mismatch: asset: {published}: expected: {expected}: got: {actual}"
             )
-        os.replace(part, out)
+        if published == asset:
+            os.replace(part, out)
+        else:
+            _gunzip(part, unpacked, MAX_LIBRARY_BYTES)
+            os.replace(unpacked, out)
     finally:
         part.unlink(missing_ok=True)
+        unpacked.unlink(missing_ok=True)
         if own:
             client.close()
     return out

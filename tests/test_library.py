@@ -1,3 +1,4 @@
+import gzip
 import hashlib
 import subprocess
 from pathlib import Path
@@ -79,6 +80,52 @@ def test_download_verifies_and_saves(tmp_path, linux):
         "lib-latest", tmp_path, _client({linux: data, "SHA256SUMS": sums}), "https://x/r"
     )
     assert out.name == linux and out.read_bytes() == data
+
+
+def test_download_prefers_the_gzipped_asset_and_unpacks_it(tmp_path, linux):
+    data = b"native-library" * 1000
+    packed = gzip.compress(data)
+    sums = (
+        f"{hashlib.sha256(data).hexdigest()}  {linux}\n"
+        f"{hashlib.sha256(packed).hexdigest()}  {linux}.gz\n"
+    ).encode()
+    # The plain asset is absent from the mock: only the .gz may be requested.
+    out = library.download(
+        "lib-latest", tmp_path, _client({f"{linux}.gz": packed, "SHA256SUMS": sums}), "https://x/r"
+    )
+    assert out.name == linux and out.read_bytes() == data
+    assert sorted(p.name for p in tmp_path.iterdir()) == [linux], "no leftovers"
+
+
+def test_download_gzipped_checks_the_published_file(tmp_path, linux):
+    packed = gzip.compress(b"lib")
+    sums = f"{'0' * 64}  {linux}.gz\n".encode()
+    with pytest.raises(library.LibraryError, match=r"checksum mismatch: asset: .*\.gz"):
+        library.download(
+            "t", tmp_path, _client({f"{linux}.gz": packed, "SHA256SUMS": sums}), "https://x/r"
+        )
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_download_gzipped_that_is_not_gzip(tmp_path, linux):
+    junk = b"not gzip at all"
+    sums = f"{hashlib.sha256(junk).hexdigest()}  {linux}.gz\n".encode()
+    with pytest.raises(library.LibraryError, match="could not unpack"):
+        library.download(
+            "t", tmp_path, _client({f"{linux}.gz": junk, "SHA256SUMS": sums}), "https://x/r"
+        )
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_download_gzipped_that_unpacks_too_large(tmp_path, linux, monkeypatch):
+    monkeypatch.setattr(library, "MAX_LIBRARY_BYTES", 1000)
+    packed = gzip.compress(b"\0" * 100_000)  # a few hundred bytes, 100 kB unpacked
+    sums = f"{hashlib.sha256(packed).hexdigest()}  {linux}.gz\n".encode()
+    with pytest.raises(library.LibraryError, match="could not unpack.*larger than 1000"):
+        library.download(
+            "t", tmp_path, _client({f"{linux}.gz": packed, "SHA256SUMS": sums}), "https://x/r"
+        )
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_download_rejects_a_wrong_checksum(tmp_path, linux):
