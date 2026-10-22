@@ -546,7 +546,7 @@ class CiNode:
         send = self._open_reply_channel(leg, chan)
         state, detail, code = "error", "", -1
         try:
-            self._status.post(info, "pending", f"running on {self._machine()} ({info.os})")
+            self._post_status(info, "pending", f"running on {self._machine()} ({info.os})")
             result = self._executor.run(
                 info,
                 lambda line: send({"t": "log", "line": line[:MAX_LINE_BYTES]}),
@@ -568,12 +568,9 @@ class CiNode:
         else:
             log.info("CI leg finished: %s: %s%s", info.leg_id, state, " (fenced)" if fenced else "")
         if stale is None and not fenced:
-            try:
-                self._status.post(
-                    info, state, f"{state} on {self._machine()}" + (f": {detail}" if detail else "")
-                )
-            except Exception:
-                log.exception("could not post the commit status: %s", info.leg_id)
+            self._post_status(
+                info, state, f"{state} on {self._machine()}" + (f": {detail}" if detail else "")
+            )
             send({"t": "result", "state": state, "exit": code, "detail": detail})
             with self._lock:
                 self._send_leg("done", leg, state=state)
@@ -581,6 +578,19 @@ class CiNode:
             self._flush()
         with self._lock:
             leg.done_at = self._clock.monotonic()
+
+    def _post_status(self, info: LegInfo, state: str, description: str) -> None:
+        """Best effort: the result also goes to the submit job, which is the check that gates.
+
+        A login without write access to the repo cannot post commit statuses; that must not
+        stop the leg or hide its result.
+        """
+        try:
+            self._status.post(info, state, description)
+        except Exception as e:  # noqa: BLE001 - a status is a courtesy, never a reason to stop
+            log.warning(
+                "could not post the commit status (%s) of: %s: %s", state, info.leg_id, e
+            )
 
     def _machine(self) -> str:
         return self._cfg.name or "a team machine"

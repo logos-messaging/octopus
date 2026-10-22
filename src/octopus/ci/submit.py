@@ -56,6 +56,7 @@ class SubmitResult:
     names: dict[str, str] = field(default_factory=dict)  # os -> the node's display name
     unhandled: list[str] = field(default_factory=list)
     reasons: dict[str, str] = field(default_factory=dict)  # os -> why it fell back
+    outcomes: dict[str, dict] = field(default_factory=dict)  # os -> the node's result message
 
 
 class Submitter:
@@ -73,7 +74,9 @@ class Submitter:
         sleep: Callable[[float], None] = time.sleep,
         monotonic: Callable[[], float] = time.monotonic,
         pump: Callable[[], None] | None = None,
+        done_grace_s: float = 15.0,
     ) -> None:
+        self._done_grace_s = done_grace_s
         self._transport = transport
         self._team = team
         self._wait_s = wait_s
@@ -220,38 +223,98 @@ class Submitter:
         result: SubmitResult,
         on_line: Callable[[str, str], None],
         timeout_s: float,
+        silent_s: float = 90.0,
     ) -> dict[str, dict]:
-        """Print the log of the handled legs until each reports its result (or time runs out)."""
+        """Print the log of the handled legs until each reports its result.
+
+        Returns os -> the result message of its node: `state` is success, failure, error or
+        cancelled as the node reported it. Two are made up here: `lost`, a node that said nothing
+        (no log line, no lease) for `silent_s`, whose leg should run elsewhere, and `timeout`,
+        a leg still running when `timeout_s` passed.
+        """
         results: dict[str, dict] = {}
-        opened = []
-        for leg in self._legs.values():
-            node = result.handled.get(leg.os)
-            if node is None:
-                continue
-            chan = channel_id(leg.leg_id, node)
-            peer = decode_public_key(result.enc_pubs[leg.os])
-            cipher = PairCipher(derive_channel_key(leg.reply_key, peer, chan))
+        opened: dict[str, str] = {}  # os -> channel
+        owners = {os_name: node for os_name, node in result.handled.items()}
+        alive: dict[str, float] = {}
+        done_said: dict[str, tuple[str, float]] = {}  # os -> (state, when) from a `done` lease
 
-            def on_msg(_sender: str, data: bytes, os_name: str = leg.os) -> None:
-                try:
-                    msg = json.loads(data)
-                except ValueError:
-                    return
-                if msg.get("t") == "log":
-                    on_line(os_name, str(msg.get("line", "")))
-                elif msg.get("t") == "result":
-                    results[os_name] = msg
+        def on_node_message(_topic: str, payload: bytes) -> None:
+            if len(payload) > MAX_CI_BYTES:
+                return
+            try:
+                msg = NodeMessage.model_validate(json.loads(payload))
+            except (ValueError, ValidationError):
+                return
+            if msg.kind not in ("lease", "done"):
+                return
+            leg = self._legs.get(msg.leg_id)
+            if leg is None or owners.get(leg.os) != msg.node_id or leg.os in results:
+                return
+            if not valid_node_message(msg, self._team, leg.repo):
+                return
+            alive[leg.os] = self._mono()
+            if msg.kind == "done":
+                done_said.setdefault(leg.os, (msg.state, self._mono()))
 
-            self._transport.open_channel(chan, leg_topic(leg.leg_id), "submitter", cipher, on_msg)
-            opened.append(chan)
-            # the node replays what it sent before this channel was open
-            self._transport.send_on_channel(chan, b'{"t":"hello"}')
-        start = self._mono()
+        self._transport.subscribe(CI_TOPIC, on_node_message)
         try:
-            while len(results) < len(opened) and self._mono() - start < timeout_s:
+            for leg in self._legs.values():
+                node = result.handled.get(leg.os)
+                if node is None:
+                    continue
+                chan = channel_id(leg.leg_id, node)
+                peer = decode_public_key(result.enc_pubs[leg.os])
+                cipher = PairCipher(derive_channel_key(leg.reply_key, peer, chan))
+
+                def on_msg(_sender: str, data: bytes, os_name: str = leg.os) -> None:
+                    try:
+                        msg = json.loads(data)
+                    except ValueError:
+                        return
+                    alive[os_name] = self._mono()
+                    if msg.get("t") == "log":
+                        on_line(os_name, str(msg.get("line", "")))
+                    elif msg.get("t") == "result":
+                        results[os_name] = msg
+
+                self._transport.open_channel(
+                    chan, leg_topic(leg.leg_id), "submitter", cipher, on_msg
+                )
+                opened[leg.os] = chan
+                alive[leg.os] = self._mono()
+                # the node replays what it sent before this channel was open
+                self._transport.send_on_channel(chan, b'{"t":"hello"}')
+            start = self._mono()
+            while len(results) < len(opened):
+                now = self._mono()
+                if now - start >= timeout_s:
+                    for os_name in opened:
+                        results.setdefault(
+                            os_name,
+                            {"t": "result", "state": "timeout", "exit": -1,
+                             "detail": f"still running after {timeout_s:.0f} s"},
+                        )
+                    break
+                for os_name in opened:
+                    if os_name in results:
+                        continue
+                    said = done_said.get(os_name)
+                    if said is not None and now - said[1] >= self._done_grace_s:
+                        # the node finished but its result message never arrived
+                        results[os_name] = {
+                            "t": "result", "state": said[0] or "error", "exit": -1,
+                            "detail": "the result message was lost; the state is from its lease",
+                        }
+                    elif said is None and now - alive.get(os_name, start) >= silent_s:
+                        results[os_name] = {
+                            "t": "result", "state": "lost", "exit": -1,
+                            "detail": f"the machine said nothing for {silent_s:.0f} s",
+                        }
                 self._pump()
                 self._sleep(0.2)
         finally:
-            for chan in opened:
+            self._transport.unsubscribe(CI_TOPIC)
+            for chan in opened.values():
                 self._transport.close_channel(chan)
+        result.outcomes = dict(results)
         return results

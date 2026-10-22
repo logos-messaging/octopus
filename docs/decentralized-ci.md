@@ -52,7 +52,9 @@ for a member), and `gh auth setup-git` so the machine can clone with your creden
 
 1. The hosted `submit` job asks GitHub for one OIDC token per OS. The token's audience carries the
    OS and the key replies are sealed to, so GitHub's signature binds them. It sends the tokens
-   to the fleet and waits for a lease on each leg (see "Busy machines" below for how long).
+   to the fleet and waits for a lease on each leg (see "Busy machines" below for how long). It
+   then **stays until every leg a team machine took has ended** (see "The submit job is the
+   coordinator").
 2. Every node of that OS verifies the token (GitHub's public keys, issuer, expiry, one-time `jti`),
    then the repo, event and workflow: only `push`/`pull_request` of an allowed repo, from the
    pinned Octopus workflow. The commit, run and OS come from the token, never from the request.
@@ -63,22 +65,48 @@ for a member), and `gh auth setup-git` so the machine can clone with your creden
    status. Under a partition a leg can run twice; the status is keyed by (commit, OS), so the later
    one replaces the earlier.
 4. The owner checks out the commit in a fresh directory with your git credentials, runs
-   `.octopus/ci.sh`, streams the log, and posts the commit status `octopus/ci (<os>)` with your
-   `gh` login. The job environment has no `GITHUB_TOKEN`/`GH_TOKEN`.
+   `.octopus/ci.sh`, streams the log to the submit job, and sends it the result. It also tries to
+   post the commit status `octopus/ci (<os>)` with your `gh` login, **best effort**: a login
+   without write access to the repo cannot, and the leg runs and reports anyway. The job
+   environment has no `GITHUB_TOKEN`/`GH_TOKEN`.
 5. While a leg runs, the node asks GitHub (with the owner's `gh`, every lease interval, 10 s)
    whether it is still wanted, and stops it if not, so a cancelled run does not keep the machine
    busy and push the next run onto a paid hosted runner. A leg is stale when the attempt of its
    run concluded `cancelled` (typically `cancel-in-progress` after a new push), or, for a
    `pull_request` leg, when the PR was closed or its head is no longer the head the leg started
-   for. The Actions run of a handed-off leg completes (success) as soon as the submit job exits,
-   so `completed` alone means nothing, and a completed run can no longer be cancelled by a newer
-   push, hence the PR check. A newer commit never stops a `push` leg. Any error, rate limit or
+   for. The submit job now stays up for the legs it handed off, so the run is `in_progress` while
+   a leg runs and `completed` alone still means nothing for a leg of an older job; a completed
+   run can no longer be cancelled by a newer push, hence the PR check. A newer commit never stops a `push` leg. Any error, rate limit or
    unknown answer keeps the leg running. A stale leg frees the machine at once, publishes `done`
    with state `cancelled` (so no other node takes it over) and **posts no commit status**: it
    could be a re-run of the same commit as a newer run, and a status posted here would replace
    that run's. The `pending` posted at the start stays until the newer run replaces it; a run
    cancelled with nothing newer behind it leaves `pending` on its commit.
 6. Legs nobody leased go to a hosted runner (dynamic matrix); `windows` always does.
+
+## The submit job is the coordinator
+
+`octopus ci submit --follow` (what the reusable workflow runs) does not exit after the lease. It
+prints each leg's log with an `[os]` prefix, receives its result over the encrypted reply
+channel, writes a summary table to the job summary and decides:
+
+| A leg taken by a team machine ends as | The submit job | The leg |
+| --- | --- | --- |
+| `success` | passes | done |
+| `failure` / `error` | **fails** (the check that gates), with the exit code in the summary | is not run again |
+| `timeout`: still running after `max-run` (default 5400 s) | **fails** | is not run again |
+| `cancelled`: its run was superseded | not affected | done |
+| `lost`: the machine said nothing (no log line, no lease) for `silent-timeout` (default 90 s) | not affected | **runs on a hosted runner** (`fallback`) |
+
+So team machines need no write access to the repo: the result reaches GitHub through the submit
+job. The job is a hosted Linux job that stays up for as long as the slowest leg (at most 6 h). It
+is free on a public repo and bills minutes on a private one: lower `max-run` or `busy-wait` if
+that matters. A leg that was lost may have been taken over by another team machine in the
+meantime (nodes take over a silent owner after 30 s), so it can run twice; the fallback is the
+price of never leaving a run without a result.
+
+Not done: the node still posts its own commit status when it can, so there can be two signals
+(this job and `octopus/ci (<os>)`). Removing it is a follow-up.
 
 ## Busy machines: wait or fall back
 
