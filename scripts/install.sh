@@ -53,9 +53,15 @@ fi
 
 cat <<'MSG'
 
-Octopus is installed. Next:
-  octopus runner setup --coordinator <key>     # who may send you jobs
-  octopus runner allow <org/repo>               # which repos you serve
-  octopus runner install-service                # start at login
-  octopus lib status                            # check the native library
+Octopus is installed. Pick what this machine is for:
+  octopus ci init <owner/repo>                  # join the team CI of a repo (decentralized)
+  octopus init <owner/repo>                     # a plain GitHub runner for that repo, as a service
+  octopus init                                  # a runner of a coordinator, or a coordinator host (guided)
+Then check the native library:  octopus lib status
+Which one? See the README, "Which one do I want?".
 MSG
+
+if ! command -v octopus >/dev/null 2>&1; then
+  echo
+  echo "note: 'octopus' is not on your PATH yet. Run: pipx ensurepath (or add ${BIN:-$HOME/.local/bin} to PATH), then open a new shell"
+fi

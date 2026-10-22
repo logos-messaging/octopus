@@ -120,7 +120,7 @@ def add_manual(runner_app: typer.Typer) -> None:
         target: str = TargetArg,
         data_dir: Path | None = DataDirOpt,
     ) -> None:
-        """Run a runner made by `octopus init owner/repo` and announce it. The service runs this."""
+        """Run a runner made by `octopus init owner/repo` (or `--role manual`) and announce it. The service runs this."""
         try:
             parsed = manual.parse_target(target)
             base = data_dir_or_default(data_dir)
@@ -138,7 +138,7 @@ def add_manual(runner_app: typer.Typer) -> None:
         keep_files: bool = KeepFilesOpt,
         data_dir: Path | None = DataDirOpt,
     ) -> None:
-        """Remove a runner made by `octopus init --role manual` from GitHub and delete its files."""
+        """Remove a runner made by `octopus init owner/repo` (or `--role manual`) from GitHub and delete its files."""
         try:
             parsed = manual.parse_target(target)
             directory = manual.runner_dir(data_dir_or_default(data_dir), parsed)

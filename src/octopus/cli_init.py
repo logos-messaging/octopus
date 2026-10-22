@@ -542,7 +542,8 @@ def add_init(app: typer.Typer) -> None:
         """Set up this host as a runner or a coordinator, step by step. Safe to run again.
 
         `octopus init owner/repo` registers this machine as a GitHub runner for that repo and
-        runs it, using your gh login for the one-hour token.
+        runs it, using your gh login for the one-hour token. To join the team CI of a repo
+        instead (no runner registration), run `octopus ci init owner/repo`.
         """
         if target is not None:
             if role not in (None, "manual"):

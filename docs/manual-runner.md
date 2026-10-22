@@ -1,9 +1,10 @@
 # Manual runner: a plain GitHub runner with a one-hour token
 
-`octopus init --role manual` registers this machine with GitHub using a **registration
-token you copy from the GitHub UI**. Octopus never stores the token and never puts it on a
-command line. Use it to try a workflow on a laptop without giving any Octopus component a
-standing GitHub credential.
+`octopus init owner/repo` registers this machine with GitHub using a one-hour **registration
+token**. By default Octopus gets it from your `gh` login (see "One command"); without `gh`, or for
+the questions flow below, you copy it from the GitHub UI. Octopus never stores the token and never
+puts it on a command line. Use it to try a workflow on a laptop without giving any Octopus
+component a standing GitHub credential.
 
 **It is not the Octopus flow.** The runner takes jobs from GitHub directly: there is no
 coordinator, no scheduling, no encrypted offer and no Octopus trust policy. Any workflow in the
@@ -27,11 +28,11 @@ register a runner). Without `gh`, the token is asked for at a hidden prompt. `--
 instead of as a service. `octopus runner unregister-manual acme/app` removes the runner (the
 service is not removed yet: uninstall it with the OS tools).
 
-## Register and run
+## Register and run, with questions
 
-```bash
-octopus init --role manual        # or: octopus init, and answer "manual" to the role question
-```
+The questions flow (`octopus init --role manual`, or `octopus init` and answer "manual" to the
+role question) asks for each setting and registers the runner in the foreground instead of as a
+service. Use it when you want to pick the labels and name, or have no `gh` login.
 
 1. Octopus asks for the target: a repo (`acme/app`), an org (`acme`) or a https URL.
 2. It prints the page to open (`https://github.com/acme/app/settings/actions/runners/new`).
@@ -40,7 +41,7 @@ octopus init --role manual        # or: octopus init, and answer "manual" to the
    asks for extra labels and a runner name; an empty answer takes the default.
 4. Octopus downloads and verifies the pinned `actions/runner` release (the same one the
    coordinator flow uses), registers the runner with the label `octopus`, and runs it in the
-   foreground. Ctrl-C stops it; it stays registered.
+   foreground (no service). Ctrl-C stops it; it stays registered.
 
 Answer "no" to "Run it now?" to register only. Run `octopus init --role manual` again with the same
 target to start it later: it is already registered, so no token is asked. To register again, remove
