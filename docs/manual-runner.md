@@ -25,8 +25,8 @@ unique label over logos-delivery**, so a coordinator in [pick mode](oidc-pick.md
 Not an admin? Ask one to run `octopus invite acme/app`. It prints a line to send you privately:
 `OCTOPUS_REGISTRATION_TOKEN=<token> octopus init acme/app` (the token lasts one hour and only lets you
 register a runner). Without `gh`, the token is asked for at a hidden prompt. `--foreground` runs it in the terminal
-instead of as a service. `octopus runner unregister-manual acme/app` removes the runner (the
-service is not removed yet: uninstall it with the OS tools).
+instead of as a service. `octopus runner unregister-manual acme/app` removes the runner and its
+service.
 
 ## Register and run, with questions
 
@@ -63,8 +63,9 @@ pick this machine).
 octopus runner unregister-manual acme/app
 ```
 
-It asks for a removal token (shown on the runners page of the repo; or set `OCTOPUS_REMOVAL_TOKEN`: a registration token does not work for removal), unregisters the runner and
-deletes its local files (`--keep-files` keeps them). A runner that is only stopped stays listed in
+It asks for a removal token (shown on the runners page of the repo; or set `OCTOPUS_REMOVAL_TOKEN`: a registration token does not work for removal), unregisters the runner, removes
+the service that `octopus init owner/repo` installed for it, and deletes its local files
+(`--keep-files` keeps them). A runner that is only stopped stays listed in
 GitHub as offline until it is removed.
 
 ## Shared account and files

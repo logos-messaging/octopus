@@ -140,7 +140,8 @@ def add_manual(runner_app: typer.Typer) -> None:
             base = data_dir_or_default(data_dir)
             directory = manual.runner_dir(base, parsed)
             if not manual.is_configured(directory):
-                raise _fail(f"not registered here: run: octopus init {parsed.name}", 1)
+                # Exit code 3 (bad settings): systemd does not start the service again for it.
+                raise _fail(f"not registered here: run: octopus init {parsed.name}", 3)
             code = run_manual(directory, base, announce=True, target=parsed, fast_stop=True)
         except manual.ManualRunnerError as e:
             raise _fail(str(e), 1) from e
@@ -155,9 +156,11 @@ def add_manual(runner_app: typer.Typer) -> None:
         """Remove a runner made by `octopus init owner/repo` (or `--role manual`) from GitHub and delete its files."""
         try:
             parsed = manual.parse_target(target)
-            directory = manual.runner_dir(data_dir_or_default(data_dir), parsed)
+            base = data_dir_or_default(data_dir)
+            directory = manual.runner_dir(base, parsed)
             if not directory.is_dir():
                 typer.echo(f"nothing registered here for: {parsed.url}")
+                _remove_service(parsed, base)
                 return
             if manual.is_configured(directory):
                 page = parsed.new_runner_page.removesuffix("/new")
@@ -176,9 +179,25 @@ def add_manual(runner_app: typer.Typer) -> None:
                 typer.echo(f"unregistered from: {parsed.url}")
         except manual.ManualRunnerError as e:
             raise _fail(str(e), 2 if "could not read runner target" in str(e) else 1) from e
+        # Without a registered runner the service can only fail and be started again (#90).
+        _remove_service(parsed, base)
         if not keep_files:
             manual.delete_tree(directory)
             typer.echo(f"deleted: {directory}")
+
+
+def _remove_service(target: manual.Target, base: Path) -> None:
+    """Remove the service that `octopus init owner/repo` installed for `target`, if there is one."""
+    from .agent import service
+
+    name = service.manual_spec(target.name, target.slug, base).name
+    try:
+        installed, _ = service.status(name=name)
+        if installed:
+            result = service.uninstall(name=name)
+            typer.echo(f"removed the service: {result.path}")
+    except service.ServiceError as e:
+        typer.echo(f"warning: could not remove the service {name}: {e}", err=True)
 
 
 def add_invite(app: typer.Typer) -> None:
