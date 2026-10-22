@@ -11,6 +11,7 @@ from urllib.parse import quote
 import typer
 
 from .github.setup import Check, Status
+from .process import leave
 
 ci_app = typer.Typer(no_args_is_help=True, help="Octopus CI: team machines run Linux/macOS legs.")
 team_app = typer.Typer(no_args_is_help=True, help="The team: who may run CI legs.")
@@ -113,7 +114,7 @@ def ci_node(
         settings = RunnerConfig.load(settings_path())
     except ConfigError as e:
         raise _fail(str(e), 3) from e
-    transport = LogosTransport(settings.node_config(home.node_dir))
+    transport = LogosTransport(settings.node_config(home.node_dir), fast_stop=True)
     import platform
 
     try:
@@ -142,6 +143,7 @@ def ci_node(
     stopped.wait()
     runtime.stop()
     typer.echo("CI node stopped")
+    leave()
 
 
 def _mint_token(request_url: str, request_token: str, audience: str) -> str:
@@ -233,11 +235,9 @@ def _exit_now() -> None:
     """Leave without stopping the node: the phase 0 spike measured `stop()` at ~23 s and the
     native library crashed at interpreter exit in Edge mode (exit code 139). The outputs are
     already written, and the job has nothing left to clean up."""
-    import sys
+    from .process import exit_now
 
-    sys.stdout.flush()
-    sys.stderr.flush()
-    os._exit(0)
+    exit_now(0)
 
 
 def _fall_back_all(oses: list[str], reason: str) -> None:

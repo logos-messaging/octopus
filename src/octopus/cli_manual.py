@@ -14,6 +14,7 @@ from pathlib import Path
 import typer
 
 from .agent import manual
+from .process import leave
 
 TargetArg = typer.Argument(..., help="owner/repo, owner (an org), or the https URL of either.")
 KeepFilesOpt = typer.Option(
@@ -88,11 +89,14 @@ def ask_token(
     return token
 
 
-def run_manual(directory: Path, base: Path, announce: bool, target: manual.Target) -> int:
+def run_manual(
+    directory: Path, base: Path, announce: bool, target: manual.Target, fast_stop: bool = False
+) -> int:
     """Run the GitHub runner; with `announce`, also publish its label and target over logos.
 
     The target (the repo or org the runner is registered on) lets a coordinator in pick mode
-    give the runner only jobs of that repo or org.
+    give the runner only jobs of that repo or org. With `fast_stop` the caller ends the process
+    with `octopus.process.leave` (the native node is not torn down).
     """
     from contextlib import ExitStack
 
@@ -102,7 +106,8 @@ def run_manual(directory: Path, base: Path, announce: bool, target: manual.Targe
     with ExitStack() as stack:
         if announce and label is not None:
             try:
-                runner_id = stack.enter_context(manual_presence.announce(label, base, target=target.name))
+                runner_id = stack.enter_context(manual_presence.announce(label, base, target=target.name, fast_stop=fast_stop)
+                )
                 typer.echo(f"announcing label {label} as runner: {runner_id}")
             except Exception as e:  # noqa: BLE001 - no node library or network: the runner works
                 typer.echo(f"note: could not announce the label: {e}", err=True)
@@ -122,10 +127,10 @@ def add_manual(runner_app: typer.Typer) -> None:
             directory = manual.runner_dir(base, parsed)
             if not manual.is_configured(directory):
                 raise _fail(f"not registered here: run: octopus init {parsed.name}", 1)
-            code = run_manual(directory, base, announce=True, target=parsed)
+            code = run_manual(directory, base, announce=True, target=parsed, fast_stop=True)
         except manual.ManualRunnerError as e:
             raise _fail(str(e), 1) from e
-        raise typer.Exit(code=code)
+        leave(code)
 
     @runner_app.command("unregister-manual")
     def unregister_manual(

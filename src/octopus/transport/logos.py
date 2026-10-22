@@ -12,6 +12,7 @@ from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+from ..process import mark_native_node_left
 from . import library
 from .base import ChannelHandler, ChannelTransport, Cipher, Handler, SendResult
 
@@ -88,7 +89,13 @@ class LogosTransport(ChannelTransport):
     def __init__(
         self,
         config: LogosConfig | dict,
+        *,
+        fast_stop: bool = False,
     ) -> None:
+        # With `fast_stop`, stop() leaves the native node running instead of destroying it
+        # (teardown takes ~23 s and can crash). The process must then end with
+        # `octopus.process.leave`, which exits with os._exit.
+        self.fast_stop = fast_stop
         self._config = config.to_node_config() if isinstance(config, LogosConfig) else config
         self._topic_handlers: dict[str, Handler] = {}
         self._status_callbacks: list[StatusCallback] = []
@@ -136,7 +143,10 @@ class LogosTransport(ChannelTransport):
                 return
             node, handler_thread = self._detach()
         if node is not None:
-            node.stop_and_destroy()
+            if self.fast_stop:
+                mark_native_node_left()
+            else:
+                node.stop_and_destroy()
         if handler_thread is not None and handler_thread is not threading.current_thread():
             handler_thread.join(timeout=5)
         self._set_status(DISCONNECTED, notify=False)
