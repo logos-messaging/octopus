@@ -370,7 +370,8 @@ def _write_summary(markdown: str) -> None:
     """Append to the job summary of the workflow run, when running in GitHub Actions."""
     path = os.environ.get("GITHUB_STEP_SUMMARY")
     if path:
-        with open(path, "a") as f:
+        # GitHub reads the summary as UTF-8; Windows would write it as cp1252 and fail on the icons
+        with open(path, "a", encoding="utf-8", newline="\n") as f:
             f.write(markdown + "\n")
 
 
@@ -382,7 +383,7 @@ def _write_outputs(handled: list[str], unhandled: list[str], failed: list[str] |
         f"failed={json.dumps(failed or [])}",
     ]
     if out:
-        with open(out, "a") as f:
+        with open(out, "a", encoding="utf-8", newline="\n") as f:
             f.write("\n".join(lines) + "\n")
     else:
         typer.echo("\n".join(lines))

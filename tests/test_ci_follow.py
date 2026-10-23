@@ -298,3 +298,14 @@ def test_the_run_context_cannot_inject_markup_into_the_summary():
     assert "](http://evil" not in head
     assert head.count("`") == 4, "two code spans: the repo and the commit"
     assert "\n#" not in head.split("### Octopus CI", 1)[1]
+
+
+def test_the_summary_file_is_written_as_utf8_with_the_icons(tmp_path, monkeypatch):
+    """Windows writes text as cp1252 unless told otherwise, and the icons then raise."""
+    out = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(out))
+    cli_ci._write_summary(render(["linux"], _ok_result(), context=CTX, hosted=["windows"]))
+    raw = out.read_bytes()
+    assert "✅".encode() in raw and "☁️".encode() in raw
+    assert b"\r\n" not in raw, "GitHub reads \\n line ends"
+    assert raw.decode("utf-8").startswith("### Octopus CI\n")
