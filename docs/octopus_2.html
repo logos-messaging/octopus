@@ -1,0 +1,517 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Octopus: your team's machines run its CI</title>
+<style>
+  :root {
+    --purple: #6d28d9; --purple-soft: #a78bfa; --ink: #1b1f2a; --grey: #5b6375;
+    --lilac: #ede9fe; --green: #dcfce7; --green-line: #16a34a; --panel: #f1f3f7; --bg: #ffffff;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #0f1117; font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  #viewport { position: fixed; inset: 0; overflow: hidden; }
+  #stage { width: 1280px; height: 720px; position: absolute; left: 50%; top: 50%; transform-origin: center center; }
+  .slide { position: absolute; inset: 0; background: var(--bg); color: var(--ink); padding: 56px 64px 0; display: none; overflow: hidden; }
+  .slide.active { display: block; }
+  .slide.dark { background: var(--ink); color: #fff; }
+  .kicker { font-size: 15px; font-weight: 700; letter-spacing: .16em; color: var(--purple); text-transform: uppercase; margin: 0 0 8px; }
+  h1 { font-size: 46px; line-height: 1.1; margin: 0 0 34px; font-weight: 800; letter-spacing: -.01em; }
+  .foot { position: absolute; left: 64px; right: 64px; bottom: 22px; display: flex; justify-content: space-between; font-size: 14px; color: var(--grey); }
+  ul { margin: 0; padding-left: 26px; font-size: 24px; line-height: 1.35; }
+  li { margin-bottom: 14px; }
+  li ul { margin-top: 10px; font-size: 20px; color: var(--grey); }
+  li ul li { margin-bottom: 8px; }
+  .cols { display: grid; gap: 28px; }
+  .cols.two { grid-template-columns: 1fr 1fr; }
+  .cols.three { grid-template-columns: repeat(3, 1fr); }
+  .card { background: var(--lilac); border: 1.5px solid var(--purple); border-radius: 16px; padding: 22px 24px; }
+  .card h3 { margin: 0 0 12px; font-size: 24px; color: var(--purple); }
+  .card p { margin: 0; font-size: 20px; line-height: 1.4; }
+  .card.green { background: var(--green); border-color: var(--green-line); }
+  .card.grey { background: var(--panel); border-color: var(--grey); }
+  .card.green h3, .card.grey h3 { color: var(--ink); }
+  .stack { display: grid; gap: 18px; align-content: start; }
+  .stack .card { padding: 16px 22px; }
+  .stack .card h3 { font-size: 20px; margin-bottom: 4px; }
+  .stack .card p { font-size: 17px; }
+  .col-card ul { font-size: 19px; line-height: 1.35; padding-left: 22px; }
+  .col-card li { margin-bottom: 12px; }
+  code { font-family: var(--mono); font-size: .86em; background: rgba(27,31,42,.07); padding: 1px 6px; border-radius: 5px; }
+  .note { font-size: 16px; color: var(--grey); margin: 14px 0 12px; }
+  .python { background: var(--green); border-radius: 12px; padding: 12px 20px; font-size: 18px; }
+  table { border-collapse: collapse; width: 100%; font-size: 21px; }
+  td { padding: 13px 16px; border-bottom: 1px solid #e4e7ec; vertical-align: middle; }
+  td.n { width: 56px; text-align: center; font-weight: 800; color: var(--purple); font-size: 24px; }
+  td.c { width: 300px; font-family: var(--mono); font-weight: 700; font-size: 20px; }
+  .title-slide h2 { font-size: 92px; margin: 140px 0 10px; line-height: 1; font-weight: 800; }
+  .title-slide .sub { font-size: 34px; color: var(--purple-soft); margin: 0 0 56px; }
+  .title-slide .meta { font-size: 22px; margin: 0 0 6px; }
+  .title-slide .authors { position: absolute; left: 64px; bottom: 64px; font-size: 22px; color: var(--purple-soft); }
+  .diagram { position: relative; height: 470px; }
+  .node { position: absolute; background: var(--panel); border: 1.5px solid var(--purple); border-radius: 14px; text-align: center; display: grid; place-content: center; padding: 8px; }
+  .node b { font-size: 21px; } .node span { font-size: 15px; color: var(--grey); white-space: pre-line; }
+  .node.big { background: var(--lilac); } .node.big b { font-size: 26px; }
+  .node.ok { background: var(--green); border-color: var(--green-line); }
+  .zone { position: absolute; border: 2px dashed var(--purple-soft); border-radius: 18px; }
+  .zone-label { position: absolute; font-size: 14px; font-weight: 700; color: var(--purple); letter-spacing: .04em; }
+  .lbl { position: absolute; font-size: 15px; color: var(--grey); }
+  svg.arrows { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+  .caption { position: absolute; left: 0; right: 0; bottom: 0; font-size: 16px; color: var(--grey); }
+
+  .gantt { width: 100%; }
+  .gantt svg { width: 100%; height: auto; display: block; font-family: inherit; }
+  .gantt .lane-label { font-size: 15px; font-weight: 700; fill: #1b1f2a; }
+  .gantt .bar-text { font-size: 13px; fill: #1b1f2a; }
+  .gantt .arrow-label { font-size: 12px; fill: #5b6375; }
+  .gantt .axis-text { font-size: 12px; fill: #5b6375; }
+  .gantt-title { font-size: 17px; font-weight: 700; color: var(--purple); margin: 0 0 6px; }
+  .steps { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 36px; margin-top: 14px; }
+  .step { display: flex; gap: 12px; align-items: flex-start; font-size: 16px; line-height: 1.35; color: var(--grey); }
+  .step b { color: var(--ink); font-size: 17px; }
+  .step-n { flex: none; width: 28px; height: 28px; border-radius: 50%; background: var(--purple); color: #fff; font-weight: 800; font-size: 15px; display: grid; place-items: center; margin-top: 2px; }
+  table.issues { font-size: 17px; } table.issues td { padding: 8px 14px; vertical-align: top; }
+  table.issues th { text-align: left; font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--purple); padding: 0 12px 8px; border-bottom: 2px solid var(--purple); }
+  table.issues td:first-child { width: 330px; font-weight: 700; }
+  table.issues td:nth-child(2) { width: 330px; color: var(--grey); }
+  .flow-note { font-size: 17px; color: var(--grey); margin: 12px 0 0; line-height: 1.4; }
+  .step-tag { display: inline-block; background: var(--purple); color: #fff; border-radius: 999px; padding: 2px 12px; font-size: 14px; font-weight: 700; margin-right: 8px; vertical-align: middle; }
+  #hud { position: fixed; right: 14px; top: 10px; color: #9aa3b2; font-size: 13px; opacity: .7; }
+  @media print {
+    @page { size: 1280px 720px; margin: 0; }
+    html, body { background: #fff; height: auto; }
+    #viewport { position: static; display: block; }
+    #stage { transform: none !important; position: static; width: auto; height: auto; }
+    .slide { display: block !important; position: relative; width: 1280px; height: 720px; page-break-after: always; break-after: page; }
+    #hud { display: none; }
+  }
+  pre.code { margin: 0; background: #0f1117; color: #e7e9ee; border-radius: 14px; padding: 18px 20px; font: 15px/1.5 var(--mono); white-space: pre; overflow: hidden; }
+  pre.code i { font-style: normal; color: #8b93a5; }
+  .code-cols { grid-template-columns: 1.3fr 1fr; gap: 36px; align-items: start; }
+</style>
+</head>
+<body>
+<div id="viewport"><div id="stage">
+
+<!-- 1 -->
+<section class="slide dark title-slide">
+  <h2>Octopus</h2>
+  <p class="sub">Your team's machines run its CI, over Logos Delivery</p>
+  <p class="meta">Hackathon - Logos Messaging Offsite 2026</p>
+  <p class="meta">Logos Delivery</p>
+  <div class="authors">Fabiana Cecin &nbsp;·&nbsp; Tanya Stubbs &nbsp;·&nbsp; Ivan Folgueira Bande</div>
+</section>
+
+<!-- 2 -->
+<section class="slide">
+  <p class="kicker">The problem</p>
+  <h1>CI minutes cost money, and our own machines sit idle</h1>
+  <div class="cols" style="grid-template-columns: 1.5fr 1fr; gap: 56px;">
+    <ul>
+      <li>GitHub-hosted runners bill by the minute. macOS minutes cost the most.</li>
+      <li>Every developer has a fast machine that is idle most of the day</li>
+      <li>Self-hosted runners exist, but:
+        <ul><li>registering one needs repo admin rights</li><li>to add them for each job, a server must hold a GitHub admin token</li></ul>
+      </li>
+      <li>We want team machines to run the CI, with no server and no stored admin token</li>
+    </ul>
+    <div class="stack">
+      <p class="kicker" style="margin:0 0 -6px">Where can CI run?</p>
+      <div class="card grey"><h3>✗ GitHub-hosted runner</h3><p>paid per minute, so we keep it only as the fallback</p></div>
+      <div class="card grey"><h3>✗ Self-hosted runner</h3><p>needs repo admin rights, or a server that holds an admin token</p></div>
+      <div class="card green"><h3>✓ Team machine with Octopus</h3><p>idle, owned by a team member, no admin token</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- 3 -->
+<section class="slide">
+  <p class="kicker">The idea</p>
+  <h1>Logos Delivery is the control plane</h1>
+  <div class="cols" style="grid-template-columns: 1.5fr 1fr; gap: 56px;">
+    <ul>
+      <li>There is no server in the middle. The team machines and the submit job meet on a Logos Delivery topic.</li>
+      <li>Discovery, test job assignment, results and live logs all go over Logos Delivery</li>
+      <li>GitHub only proves who asks, with an OIDC token. No runner registers with GitHub.</li>
+      <li>Each test job that no team machine takes, and Windows, goes to a GitHub-hosted runner</li>
+    </ul>
+    <div class="stack">
+      <div class="card"><h3>Discovery</h3><p>who is online, which OS</p></div>
+      <div class="card"><h3>Assignment</h3><p>claim · lease · takeover</p></div>
+      <div class="card"><h3>Results &amp; logs</h3><p>encrypted reply channel</p></div>
+    </div>
+  </div>
+  <div class="python" style="position:absolute; left:64px; right:64px; bottom:64px"><b>Octopus is written in Python.</b> It calls liblogosdelivery through <b>logos-delivery-python-bindings</b> (cffi, <code>NodeWrapper</code>).</div>
+</section>
+
+<!-- 4 -->
+<section class="slide">
+  <p class="kicker">How it works</p>
+  <h1>How a CI run reaches a team machine</h1>
+  <div class="diagram">
+    <svg class="arrows" viewBox="0 0 1152 470">
+      <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#6d28d9"/></marker></defs>
+      <g stroke="#6d28d9" stroke-width="2.5" fill="none" marker-end="url(#ah)">
+        <line x1="130" y1="100" x2="130" y2="238"/>
+        <line x1="260" y1="296" x2="400" y2="228"/>
+        <line x1="720" y1="190" x2="880" y2="96"/>
+        <line x1="720" y1="215" x2="880" y2="215"/>
+        <line x1="720" y1="240" x2="880" y2="334"/>
+      </g>
+    </svg>
+        <div class="zone" style="left:-14px;top:-6px;width:288px;height:372px"></div>
+    <div class="zone-label" style="left:0;top:366px">ON GITHUB (GitHub-hosted runner)</div>
+    <div class="node" style="left:0;top:10px;width:260px;height:90px"><b>CI run</b><span>push / pull request</span></div>
+    <div class="node" style="left:0;top:236px;width:260px;height:118px"><b>submit job</b><span>runs <code>octopus ci submit</code>
+asks GitHub for OIDC tokens
+joins the Logos Delivery network</span></div>
+    <div class="node big" style="left:400px;top:150px;width:320px;height:130px"><b>Logos Delivery</b><span>public logos.test network
+topic + encrypted channels</span></div>
+    <div class="node ok" style="left:880px;top:50px;width:272px;height:92px"><b>Team machine (macOS)</b><span>octopus ci node</span></div>
+    <div class="node ok" style="left:880px;top:169px;width:272px;height:92px"><b>Team machine (Linux)</b><span>octopus ci node</span></div>
+    <div class="node" style="left:880px;top:288px;width:272px;height:92px"><b>GitHub-hosted runner</b><span>fallback · Windows</span></div>
+    <div class="lbl" style="left:142px;top:155px">runs the workflow</div>
+    <div class="lbl" style="left:268px;top:300px">request per test job</div>
+    <div class="lbl" style="left:735px;top:98px">claim / lease</div>
+    <div class="lbl" style="left:690px;top:335px">nobody took it</div>
+    <div class="caption">The submit job runs Octopus on a GitHub-hosted runner. Team machines verify the token against GitHub's public keys and rank themselves (rendezvous hash). One claims the test job, runs <code>.octopus/ci.sh</code>, and streams the log back. The submit job prints the log and passes or fails the PR check.</div>
+  </div>
+</section>
+
+<section class="slide">
+  <p class="kicker">How it works</p>
+  <h1>A CI run over time</h1>
+  <div class="gantt" data-spec="ci"></div>
+  <p class="flow-note">If a team machine stops during a run, its lease expires and another team machine takes over with a higher epoch. The epoch stops the old owner from reporting a result. A network partition can still make a test job run twice.</p>
+</section>
+
+
+<!-- 5 -->
+
+<!-- 6 -->
+
+<!-- 8 -->
+
+<!-- Logos Delivery API overview -->
+<section class="slide">
+  <p class="kicker">Logos Delivery API</p>
+  <h1>All of the Logos Delivery API that we needed</h1>
+  <div class="cols code-cols">
+<pre class="code">node = NodeWrapper.create_and_start(
+    {"mode": "Core", "preset": "logos.test"},
+    event_cb=on_event)        <i># one callback, all events</i>
+
+<i># messaging</i>
+node.subscribe_content_topic(topic)
+node.send_message({"contentTopic": topic,
+                   "payload": b64(data), "ephemeral": False})
+<i># on_event: message_received</i>
+
+<i># reliable channels</i>
+node.channel_create(chan, topic, sender,
+                    encrypt_fn=enc, decrypt_fn=dec)
+node.channel_send(chan, {"payload": b64(data)})
+<i># on_event: channel_message_received | _sent | _lost</i>
+node.channel_close(chan)
+
+node.stop_and_destroy()</pre>
+    <ul>
+      <li>Seven calls and one event callback</li>
+      <li>The <code>logos.test</code> preset gives the cluster, the shards and the entry nodes</li>
+      <li>All of the Logos Delivery code in Octopus is one file of 511 lines, with threads and restarts</li>
+      <li>A new node joins and sends messages in about 4 s</li>
+      <li>No open ports. Team machines behind home NAT work.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="slide">
+  <p class="kicker">Reliable-channel API</p>
+  <h1>Reliable channels: private logs and results</h1>
+  <div class="cols three">
+    <div class="card col-card"><h3>Where</h3><ul>
+      <li>Log lines from the team machine back to the submit job, live</li>
+      <li>The result of the test job: pass, fail, exit code</li></ul></div>
+    <div class="card col-card"><h3>Why</h3><ul>
+      <li>The result decides whether the PR passes, so it must not be lost</li>
+      <li>Only the submit job can read the log, because it can contain secrets</li>
+      <li>A submit job that connects late or reconnects must catch up</li></ul></div>
+    <div class="card col-card"><h3>How</h3><ul>
+      <li><code>channel_create</code> / <code>channel_send</code> / <code>channel_close</code>, one channel between a team machine and the submit job</li>
+      <li>Octopus plugs in its own cipher, keyed from the reply key and the machine key</li>
+      <li>The library acks and retries. The team machine replays its buffer on hello.</li></ul></div>
+  </div>
+  <p class="note">We learned that the “sent” event of a channel needs a Store node. So our tests check delivery only.</p>
+</section>
+
+<section class="slide">
+  <p class="kicker">Reliable channels · how 1 of 3</p>
+  <h1>How logs and results come back</h1>
+  <div class="gantt" data-spec="r1"></div>
+  <div class="steps">
+    <div class="step"><span class="step-n">1</span><div><b>The request carries a reply key</b><br>replies are encrypted to this key, so only the submit job can read them</div></div>
+    <div class="step"><span class="step-n">2</span><div><b>The team machine that wins the test job opens a channel back</b><br>an encrypted, reliable channel on Logos Delivery</div></div>
+    <div class="step"><span class="step-n">3</span><div><b>The submit job says hello</b><br>the team machine replays the log it already has, so a late or reconnecting submit job misses nothing</div></div>
+    <div class="step"><span class="step-n">4</span><div><b>Log lines and the result stream back</b><br>the channel acks and retries whatever is lost</div></div>
+  </div>
+</section>
+
+<section class="slide">
+  <p class="kicker">Reliable channels · how 2 of 3</p>
+  <h1>Our cipher, the library’s transport</h1>
+  <div class="gantt" data-spec="r2"></div>
+  <p class="flow-note">Both sides derive the same channel key from the two public keys (X25519). This needs no extra round trip. The library decrypts each segment on its own, so every segment carries its own nonce. Only the two key holders can encrypt or decrypt, and a segment that fails to decrypt is dropped.</p>
+</section>
+
+<section class="slide">
+  <p class="kicker">Reliable channels · how 3 of 3</p>
+  <h1>Logs: buffered, then replayed on hello</h1>
+  <div class="gantt" data-spec="r3"></div>
+  <p class="flow-note">The team machine keeps its log buffer, so a submit job that connects late, or reconnects, gets the whole log in order. The reliable channel acks and retries what is lost.</p>
+</section>
+
+
+<!-- 9 -->
+<section class="slide">
+  <p class="kicker">Messaging API</p>
+  <h1>Messaging: announce, ask, and be heard</h1>
+  <div class="cols three">
+    <div class="card col-card"><h3>Where</h3><ul>
+      <li>Announces: which team machines are online, idle or busy, every 10 s</li>
+      <li>The signed team member list, so team machines know who belongs</li>
+      <li>Requests from the submit job, then claims and leases between team machines</li>
+      <li>Done messages when a test job ends</li></ul></div>
+    <div class="card col-card"><h3>Why</h3><ul>
+      <li>One topic reaches each team machine online. There are no addresses and no registry server.</li>
+      <li>These messages repeat or are idempotent, so best-effort delivery is enough</li>
+      <li>Authenticity comes from signatures in Octopus, not from the network</li></ul></div>
+    <div class="card col-card"><h3>How</h3><ul>
+      <li><code>subscribe</code> and <code>send_message</code> on content topics under <code>/octopus/1/</code></li>
+      <li>Library events are handed to a worker thread and de-duplicated</li>
+      <li>A restart of the Logos Delivery node replays every subscription</li>
+      <li>All on one topic of the public logos.test network</li></ul></div>
+  </div>
+</section>
+
+<section class="slide">
+  <p class="kicker">Messaging · flow 1 of 2</p>
+  <h1>Announces: who is online, and how busy</h1>
+  <div class="gantt" data-spec="m1"></div>
+  <p class="flow-note">The submit job runs on a GitHub-hosted Linux runner. It joins the Logos Delivery network, listens to the announces, and decides. Team machines announce every 10 s if they are busy. With no team machine of the OS online, the submit job gives up after about 25 s. With an idle one, it waits up to 45 s for a lease. With all busy, it waits up to 240 s. Then it falls back to a GitHub-hosted runner.</p>
+</section>
+
+
+<section class="slide">
+  <p class="kicker">Messaging · flow 2 of 2</p>
+  <h1>Events and restarts</h1>
+  <p class="gantt-title">Events: handed to a worker thread, de-duplicated</p><div class="gantt" data-spec="m3a"></div><p class="gantt-title" style="margin-top:14px">Restart: the node is recreated and every subscription is replayed</p><div class="gantt" data-spec="m3b"></div>
+  <p class="flow-note">The library thread never waits for a handler, and a restart loses no subscription.</p>
+</section>
+
+
+<!-- 10 -->
+<section class="slide">
+  <p class="kicker">What we learned</p>
+  <h1>What went well, what can be better</h1>
+  <div class="cols two" style="gap: 28px;">
+    <div class="card green col-card" style="padding:22px 26px"><h3>Went well</h3><ul>
+      <li>A fresh node joins the public network and exchanges messages in about 4 s</li>
+      <li>Team machines behind home NATs reach each other through the network, with no ports to open and no server</li>
+      <li>The library does the acks and retries for our reliable channels, with our own cipher</li>
+      <li>Running the real library in CI found crashes at exit and shared state early</li></ul></div>
+    <div class="card col-card" style="padding:22px 26px"><h3>Can be better</h3><ul>
+      <li>A runtime log level that works, and a quiet default</li>
+      <li>A fast, clean stop: no 24 s wait, no leaked context</li>
+      <li>State in a per-node path by default, not <code>./data</code> of the working dir</li>
+      <li>Library limits that are visible and settable (peers per IP)</li>
+      <li>Prebuilt libraries for Windows, and bindings that need no repo checkout</li></ul></div>
+  </div>
+</section>
+
+<section class="slide">
+  <p class="kicker">What we learned</p>
+  <h1>Logos Delivery issues we hit</h1>
+  <table class="issues">
+    <tr><th>What we hit</th><th>Effect</th><th>What we did</th></tr>
+    <tr><td>Log level ignored</td><td>Built with TRACE, about 360 lines a second</td><td>Build with runtime filtering, level INFO</td></tr>
+    <tr><td>Slow, unclean stop</td><td>24 s to exit, leaked context, crash at exit</td><td>Exit right after the outputs are written</td></tr>
+    <tr><td>Crash on stop (libp2p <code>expandAddrs</code>)</td><td>NAT port-mapping service changes a list while it is read</td><td>No port mapping on team machines by default</td></tr>
+    <tr><td>Channel state in <code>./data</code></td><td>Two roles in one directory shared one SDS state</td><td>A data directory per role</td></tr>
+    <tr><td>5 peers per IP</td><td>Anti-Sybil limit, not exposed. A big office behind one NAT loses peers.</td><td>Open. It degrades, it does not break.</td></tr>
+    <tr><td>279 MB library, 9-minute install</td><td>Unstripped build, recursive submodule clones</td><td>Stripped to 68 MB, prebuilt release, install from archives</td></tr>
+    <tr><td>Bindings load a Linux/macOS library</td><td>No Windows library</td><td>Windows test jobs run on GitHub-hosted runners</td></tr>
+    <tr><td>24 h replay on first start</td><td>Each new submit job got a day of old messages</td><td>The backfill of logos-delivery master</td></tr>
+  </table>
+</section>
+
+<section class="slide">
+  <p class="kicker">What we learned</p>
+  <h1>We used it on itself</h1>
+  <div class="cols two" style="gap: 56px;">
+    <ul>
+      <li>Octopus runs its own CI through Octopus</li>
+      <li>We installed it as new users and filed what hurt</li>
+      <li>Fixed during the hackathon:
+        <ul><li>library 279 MB → 68 MB (stripped)</li><li>TRACE logs, about 360 lines a second → INFO by default</li><li>stop took 24 s → immediate</li><li>clear errors for missing gh login and tokens</li></ul></li>
+    </ul>
+    <ul>
+      <li>Still open:
+        <ul><li>a node keeps ≤ 5 peers per IP (library limit)</li><li>nightly end-to-end test needs its repo set up</li></ul></li>
+      <li>Two ways to use it, one CLI:
+        <ul><li><code>octopus ci init</code>: join the team CI</li><li><code>octopus init</code>: a plain runner for a repo</li></ul></li>
+    </ul>
+  </div>
+</section>
+
+<!-- 11 -->
+<section class="slide">
+  <p class="kicker">Where it stands</p>
+  <h1>Status and next</h1>
+  <ul>
+    <li>v0.4.0 released: pip wheel, prebuilt libraries for Linux x86_64 and macOS arm64</li>
+    <li><code>octopus update</code> upgrades a machine and restarts its service</li>
+    <li>Next:
+      <ul><li>a plug-in for each CI system. GitHub today, GitLab or a plain command later.</li><li>a macOS VM sandbox, like the Linux container</li><li>more team machines, and measuring cost and speed against GitHub-hosted runners</li></ul></li>
+  </ul>
+</section>
+
+<!-- 12 -->
+<section class="slide dark title-slide">
+  <h2 style="margin-top:190px">Thank you</h2>
+  <p class="sub">github.com/logos-messaging/octopus</p>
+  <div class="authors">Fabiana Cecin &nbsp;·&nbsp; Tanya Stubbs &nbsp;·&nbsp; Ivan Folgueira Bande</div>
+</section>
+
+</div></div>
+<div id="hud">← → to navigate · F fullscreen · P print to PDF</div>
+
+<script>
+(function () {
+
+  var SPECS = {
+    r1: { lanes: ['Submit job', 'Reply channel (Logos Delivery)', 'Team machine'], laneH: 92, barH: 46, bars: [
+      [0, 0, 14, '\u2460 request with\nreply key', 'p'], [2, 15, 31, '\u2461 claim the test job ·\nopen channel', 'g'],
+      [0, 33, 45, '\u2462 say hello', 'p'], [1, 34, 48, 'deliver · ack · retry', 'n'],
+      [2, 49, 63, '\u2462 replay the\nbuffered log', 'a'], [2, 64, 81, '\u2463 run · stream\nlog + result', 'g'],
+      [1, 64, 83, 'deliver · ack · retry', 'n'], [0, 84, 100, '\u2463 print log,\nsummary', 'p']],
+      arrows: [[0, 14, 2, 18, 'on the CI topic'], [0, 45, 1, 39, ''], [1, 48, 2, 51, ''], [2, 72, 1, 72, ''], [1, 83, 0, 87, '']] },
+    r2: { lanes: ['Submit job', 'liblogosdelivery + network', 'Team machine'], laneH: 112, bars: [
+      [0, 0, 22, 'fresh reply key pair\n(public half in the request)', 'p'], [2, 0, 22, 'its own key pair\n(public half is known)', 'p'],
+      [2, 26, 46, 'encrypt callback:\nauthenticated cipher,\nnonce per segment', 'g'],
+      [1, 48, 70, 'on the wire: nonce \u2016 ciphertext \u2016 tag', 'n'],
+      [0, 72, 86, 'decrypt callback\nper segment', 'g'], [0, 88, 100, 'bad tag →\ndropped', 'r']],
+      arrows: [[2, 46, 1, 50, ''], [1, 70, 0, 74, '']] },
+    r3: { lanes: ['Team machine', 'Submit job'], laneH: 150, bars: [
+      [0, 0, 52, 'run the test job ·\nbuffer the log', 'g'], [0, 54, 68, 'replay the buffer', 'a'], [0, 69, 90, 'live log lines', 'g'], [0, 91, 100, 'result', 'g'],
+      [1, 0, 30, 'not connected yet', 'w'], [1, 31, 42, 'hello', 'p'], [1, 54, 90, 'prints the log, in order', 'g'], [1, 91, 100, 'summary', 'p']],
+      arrows: [[1, 42, 0, 54, 'replay on hello'], [0, 78, 1, 78, ''], [0, 95, 1, 95, '']] },
+    m1: { lanes: ['Team machine', 'CI topic (Logos Delivery)', 'Submit job'], laneH: 112, bars: [
+      [0, 2, 12, 'announce:\nidle', 'p'], [0, 22, 32, 'announce:\nidle', 'p'], [0, 44, 56, 'announce:\nbusy', 'a'], [0, 66, 78, 'announce:\nbusy', 'a'],
+      [1, 0, 100, 'every 10 s, each team machine and the submit job hear each announce', 'n'],
+      [2, 13, 42, 'idle machine → wait up to 45 s for its lease', 'g'], [2, 57, 90, 'all busy → wait up to 240 s, then GitHub-hosted', 'a']],
+      arrows: [[0, 12, 2, 14, ''], [0, 32, 2, 33, ''], [0, 56, 2, 58, ''], [0, 78, 2, 79, '']] },
+    ci: { lanes: ['GitHub', 'Submit job', 'CI topic (Logos Delivery)', 'Team machine (macOS)', 'Team machine (Linux)', 'GitHub-hosted runner'], laneH: 64, barH: 44, bars: [
+      [0, 0, 10, 'push /\npull request', 'p'], [0, 80, 100, 'pass or fail\nthe PR check', 'p'],
+      [1, 11, 21, 'OIDC token +\nrequests', 'p'], [1, 22, 63, 'wait · print the streamed logs', 'w'], [1, 65, 79, 'report test jobs\nnobody took', 'p'],
+      [2, 21, 32, 'everyone\nhears', 'n'],
+      [3, 33, 47, 'verify token · policy\nrank (rendezvous)', 'g'], [3, 48, 53, 'claim', 'g'], [3, 54, 64, 'run · lease', 'g'],
+      [4, 33, 47, 'same checks · rank', 'g'], [4, 48, 53, 'claim', 'g'], [4, 54, 64, 'run · lease', 'g'],
+      [5, 80, 100, 'Windows test job +\nanything untaken', 'n']],
+      arrows: [[0, 10, 1, 12, ''], [1, 21, 2, 23, ''], [2, 32, 3, 34, ''], [2, 32, 4, 34, ''], [3, 59, 1, 60, 'live log'], [1, 79, 5, 83, 'sent to GitHub-hosted']] },
+    m3a: { lanes: ['Library event thread', 'Worker thread', 'Handler'], laneH: 56, barH: 40, bars: [
+      [0, 0, 16, 'event · hash H', 'p'], [0, 38, 58, 'the same message again', 'p'],
+      [1, 17, 37, 'new hash → hand over', 'g'], [1, 59, 80, 'seen hash → drop', 'r'],
+      [2, 38, 80, 'handler runs (it may block; the library thread does not wait)', 'g']],
+      arrows: [[0, 16, 1, 18, ''], [1, 37, 2, 40, ''], [0, 58, 1, 61, '']] },
+    m3b: { lanes: ['Connection', 'Node', 'Subscriptions'], laneH: 56, barH: 40, bars: [
+      [0, 0, 28, 'connected', 'g'], [0, 29, 46, 'lost', 'r'], [0, 47, 100, 'connected', 'g'],
+      [1, 0, 28, 'node running', 'n'], [1, 30, 50, 'restart(): new node', 'a'], [1, 52, 100, 'node running', 'n'],
+      [2, 0, 28, 'subscribed', 'p'], [2, 52, 76, 'replay every subscription', 'a'], [2, 78, 100, 'messages flow again', 'p']],
+      arrows: [[0, 46, 1, 48, ''], [1, 50, 2, 54, '']] }
+  };
+  var CLS = { p: ['#ede9fe', '#6d28d9'], g: ['#dcfce7', '#16a34a'], n: ['#f1f3f7', '#8b93a5'], r: ['#fee2e2', '#dc2626'], a: ['#fef3c7', '#d97706'], w: ['#ffffff', '#8b93a5'] };
+
+  function renderGantt(el) {
+    var sp = SPECS[el.getAttribute('data-spec')];
+    var W = 1152, labelW = 190, n = sp.lanes.length, laneH = sp.laneH, H = n * laneH + 26;
+    var barH = sp.barH || Math.min(laneH - 14, 52);
+    var x = function (t) { return labelW + 8 + t * (W - labelW - 16) / 100; };
+    var cy = function (l) { return l * laneH + laneH / 2; };
+    var o = '<svg viewBox="0 0 ' + W + ' ' + H + '" xmlns="http://www.w3.org/2000/svg"><defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#6d28d9"/></marker></defs>';
+    sp.lanes.forEach(function (name, i) {
+      o += '<rect x="0" y="' + i * laneH + '" width="' + W + '" height="' + laneH + '" fill="' + (i % 2 ? '#ffffff' : '#f7f8fb') + '"/>';
+      o += '<text class="lane-label" x="8" y="' + (cy(i) + 5) + '">' + name + '</text>';
+    });
+    sp.bars.forEach(function (b, k) {
+      var c = CLS[b[4]], x1 = x(b[1]), x2 = x(b[2]), y = cy(b[0]) - barH / 2;
+      o += '<rect x="' + x1 + '" y="' + y + '" width="' + (x2 - x1) + '" height="' + barH + '" rx="9" fill="' + c[0] + '" stroke="' + c[1] + '" stroke-width="1.6"' + (b[4] === 'w' ? ' stroke-dasharray="6 5"' : '') + '/>';
+      var lines = b[3].split('\n'), lh = 15, y0 = cy(b[0]) - (lines.length - 1) * lh / 2 + 4.5;
+      o += '<text class="bar-text" data-w="' + (x2 - x1 - 12) + '" text-anchor="middle" x="' + (x1 + x2) / 2 + '">' + lines.map(function (ln, i) { return '<tspan x="' + (x1 + x2) / 2 + '" y="' + (y0 + i * lh) + '">' + ln.replace(/&/g, '&amp;') + '</tspan>'; }).join('') + '</text>';
+    });
+    (sp.arrows || []).forEach(function (a) {
+      var down = a[2] > a[0], y1 = cy(a[0]) + (down ? barH / 2 : -barH / 2), y2 = cy(a[2]) + (down ? -barH / 2 : barH / 2);
+      var x1 = x(a[1]), x2 = x(a[3]);
+      o += '<line x1="' + x1 + '" y1="' + y1 + '" x2="' + x2 + '" y2="' + y2 + '" stroke="#6d28d9" stroke-width="2" marker-end="url(#ar)"/>';
+      if (a[4]) o += '<text class="arrow-label" x="' + ((x1 + x2) / 2 + 8) + '" y="' + ((y1 + y2) / 2 + 4) + '">' + a[4] + '</text>';
+    });
+    (sp.marks || []).forEach(function (m) {
+      o += '<text x="' + x(m[1]) + '" y="' + (cy(m[0]) + barH / 2 + 15) + '" text-anchor="middle" fill="#dc2626" font-size="13" font-weight="700">✕ ' + m[2] + '</text>';
+    });
+    o += '<text class="axis-text" x="' + (W - 8) + '" y="' + (H - 6) + '" text-anchor="end">time →</text></svg>';
+    el.innerHTML = o;
+  }
+  function fitBarText() {
+    document.querySelectorAll('.gantt .bar-text').forEach(function (t) {
+      var sl = t.closest('.slide'), shown = sl.classList.contains('active');
+      var max = parseFloat(t.getAttribute('data-w')), size = 13;
+      while (size > 9 && t.getBBox().width > max) { size -= 0.5; t.style.fontSize = size + 'px'; }
+    });
+  }
+
+  document.querySelectorAll('.gantt').forEach(renderGantt);
+  var slides = Array.prototype.slice.call(document.querySelectorAll('.slide'));
+  var stage = document.getElementById('stage');
+  var cur = 0;
+
+  slides.forEach(function (s, i) {
+    if (s.classList.contains('title-slide')) return;
+    var f = document.createElement('div');
+    f.className = 'foot';
+    f.innerHTML = '<span>Octopus · Logos Messaging Offsite 2026</span><span>' + (i + 1) + '</span>';
+    s.appendChild(f);
+  });
+
+  function fit() {
+    var k = Math.min(window.innerWidth / 1280, window.innerHeight / 720);
+    stage.style.transform = 'translate(-50%, -50%) scale(' + k + ')';
+  }
+  function show(n) {
+    cur = Math.max(0, Math.min(slides.length - 1, n));
+    slides.forEach(function (s, i) { s.classList.toggle('active', i === cur); });
+    fitBarText();
+    try { history.replaceState(null, '', '#' + (cur + 1)); } catch (e) {}
+  }
+  document.addEventListener('keydown', function (e) {
+    var k = e.key;
+    if (k === 'ArrowRight' || k === 'PageDown' || k === ' ' || k === 'Enter') { e.preventDefault(); show(cur + 1); }
+    else if (k === 'ArrowLeft' || k === 'PageUp' || k === 'Backspace') { e.preventDefault(); show(cur - 1); }
+    else if (k === 'Home') show(0);
+    else if (k === 'End') show(slides.length - 1);
+    else if (k === 'f' || k === 'F') {
+      if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen();
+    } else if (k === 'p' || k === 'P') window.print();
+  });
+  document.getElementById('viewport').addEventListener('click', function (e) {
+    show(e.clientX > window.innerWidth / 2 ? cur + 1 : cur - 1);
+  });
+  window.addEventListener('resize', fit);
+  window.addEventListener('hashchange', function () { show((parseInt(location.hash.slice(1), 10) || 1) - 1); });
+  fit();
+  setTimeout(function () { document.getElementById('hud').style.opacity = 0; }, 4000);
+  show((parseInt(location.hash.slice(1), 10) || 1) - 1);
+})();
+</script>
+</body>
+</html>
