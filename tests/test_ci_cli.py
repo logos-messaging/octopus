@@ -347,7 +347,7 @@ def test_submit_falls_back_to_github_when_no_token_can_be_minted(tmp_path, monke
         app, ["ci", "submit", "--os", "linux", "--os", "macos", "--team-key", "K"]
     )
     assert result.exit_code == 0, result.output
-    written = dict(line.split("=", 1) for line in out.read_text().splitlines())
+    written = dict(line.split("=", 1) for line in out.read_text(encoding="utf-8").splitlines())
     assert json.loads(written["handled"]) == []
     assert json.loads(written["unhandled"]) == ["linux", "macos"]
     summary = (tmp_path / "summary.md").read_text(encoding="utf-8")
@@ -375,7 +375,7 @@ def test_submit_falls_back_and_exits_at_once_when_the_fleet_is_unreachable(tmp_p
     monkeypatch.setattr("octopus.transport.logos.LogosTransport", Down)
     result = cli.invoke(app, ["ci", "submit", "--os", "linux", "--team-key", "A" * 43])
     assert result.exit_code == 0, result.output
-    written = dict(line.split("=", 1) for line in out.read_text().splitlines())
+    written = dict(line.split("=", 1) for line in out.read_text(encoding="utf-8").splitlines())
     assert json.loads(written["unhandled"]) == ["linux"]
     assert exits == [True]  # no waiting for the node to stop: the spike measured ~23 s
 

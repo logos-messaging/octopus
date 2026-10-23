@@ -134,7 +134,7 @@ def test_outputs_include_the_failed_legs(tmp_path, monkeypatch):
     out = tmp_path / "out"
     monkeypatch.setenv("GITHUB_OUTPUT", str(out))
     cli_ci._write_outputs(["linux"], ["macos"], ["linux"])
-    written = dict(line.split("=", 1) for line in out.read_text().splitlines())
+    written = dict(line.split("=", 1) for line in out.read_text(encoding="utf-8").splitlines())
     assert json.loads(written["failed"]) == ["linux"]
     assert json.loads(written["unhandled"]) == ["macos"]
 
