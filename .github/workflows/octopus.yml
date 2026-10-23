@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   ci:
-    uses: logos-messaging/octopus/.github/workflows/octopus-ci.yml@5b0139b53a51346593ebe44b9bcb81dddfac3442
+    uses: logos-messaging/octopus/.github/workflows/octopus-ci.yml@8e55b5b4c711e4d9f97b67d39f01d84a36b4fcd1
     permissions:
       id-token: write
       contents: read
