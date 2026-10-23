@@ -350,7 +350,7 @@ def test_submit_falls_back_to_github_when_no_token_can_be_minted(tmp_path, monke
     written = dict(line.split("=", 1) for line in out.read_text().splitlines())
     assert json.loads(written["handled"]) == []
     assert json.loads(written["unhandled"]) == ["linux", "macos"]
-    summary = (tmp_path / "summary.md").read_text()
+    summary = (tmp_path / "summary.md").read_text(encoding="utf-8")
     assert summary.count("GitHub-hosted runner") == 2
     assert "could not get an OIDC token" in summary
 
