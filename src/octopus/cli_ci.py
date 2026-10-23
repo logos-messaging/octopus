@@ -76,6 +76,23 @@ def _home(data_dir: Path | None):
     return ci_home(data_dir)
 
 
+def _isolation_line(home) -> str:
+    from .ci.isolation import HOST_DESCRIPTION
+    from .ci.light import LightError
+    from .ci.sandbox import SandboxError
+
+    try:
+        sandbox = home.sandbox()
+        light = home.light()
+    except (SandboxError, LightError) as e:
+        return f"unreadable settings: {e}"
+    chosen = light or sandbox
+    if chosen is None:
+        return HOST_DESCRIPTION
+    why = chosen.supported()
+    return chosen.describe() + (f" (NOT USABLE: {why})" if why else "")
+
+
 def _show(check: Check) -> Check:
     typer.echo(f"[{check.status.value:>7}] {check.name}  {check.detail}")
     return check
@@ -431,6 +448,7 @@ def ci_status(data_dir: Path | None = DataDirOpt) -> None:
         left = (ml.not_after - time.time()) / 3600
         typer.echo(f"members     {ml.scope}: {len(ml.logins)} (v{ml.version}, {left:.0f} h left)")
     typer.echo(f"daily sync  {', '.join(home.scopes()) or 'off'}")
+    typer.echo(f"isolation   {_isolation_line(home)}")
     import platform
 
     typer.echo(
@@ -600,6 +618,97 @@ def sandbox_status(data_dir: Path | None = DataDirOpt) -> None:
         f"sandbox: {sandbox.image} via {sandbox.runtime}, network {sandbox.network}, "
         f"memory {sandbox.memory}, cpus {sandbox.cpus}"
     )
+
+
+light_app = typer.Typer(
+    no_args_is_help=True, help="Run jobs as a dedicated 'octopus' account on this Mac."
+)
+ci_app.add_typer(light_app, name="light")
+
+
+@light_app.command("install")
+def light_install(
+    yes: bool = typer.Option(False, "--yes", "-y", help="Do not ask before running the commands."),
+    network: str = typer.Option("internet", "--network", help="internet, or none to cut jobs off."),
+    data_dir: Path | None = DataDirOpt,
+) -> None:
+    """Create the account and its folders (asks for the admin password), then turn it on."""
+    from .ci import light_wizard
+    from .ci.light import Light, LightError
+
+    home = _home(data_dir)
+    try:
+        Light(network=network)
+    except LightError as e:
+        raise _fail(str(e), 2) from e
+    check = light_wizard.offer_light(home, assume_yes=yes)
+    _show(check)
+    if check.status == Status.CHANGED and network != "internet":
+        home.save_light(Light(network=network))
+    if check.failed or check.status == Status.SKIPPED:
+        raise typer.Exit(code=3)
+    typer.echo("restart the node for it to take effect: octopus runner install-service")
+
+
+@light_app.command("status")
+def light_status(data_dir: Path | None = DataDirOpt) -> None:
+    """Show whether jobs run as the dedicated account, and whether that works."""
+    from .ci.light import LightError
+
+    try:
+        light = _home(data_dir).light()
+    except LightError as e:
+        raise _fail(str(e), 3) from e
+    if light is None:
+        typer.echo("light level off: see: octopus ci light install")
+        return
+    why = light.supported()
+    typer.echo(f"{light.describe()}; work root {light.work_root}")
+    if why:
+        typer.echo(f"NOT USABLE: {why}", err=True)
+        raise typer.Exit(code=3)
+    typer.echo("usable: the account exists and sudo works")
+
+
+@light_app.command("disable")
+def light_disable(data_dir: Path | None = DataDirOpt) -> None:
+    """Stop using the account (jobs run as you again). The account stays; see: ci uninstall."""
+    if _home(data_dir).clear_light():
+        typer.echo("light level off: jobs run as you after the node restarts")
+    else:
+        typer.echo("light level was already off")
+
+
+@ci_app.command("uninstall")
+def ci_uninstall(
+    yes: bool = typer.Option(False, "--yes", "-y", help="Do not ask before running the commands."),
+    data_dir: Path | None = DataDirOpt,
+) -> None:
+    """Remove the 'octopus' account, its home, the sudo rule and the work root."""
+    from .ci import light_account
+    from .ci.light import ACCOUNT, WORK_ROOT, LightError
+
+    home = _home(data_dir)
+    try:
+        light = home.light()
+        steps = light_account.uninstall_steps(
+            f"/Users/{light.account if light else ACCOUNT}",
+            account=light.account if light else ACCOUNT,
+            work_root=light.work_root if light else WORK_ROOT,
+        )
+    except LightError as e:
+        raise _fail(str(e), 3) from e
+    typer.echo("These commands will run (admin password needed):")
+    for step in steps:
+        typer.echo(f"  {step.command()}")
+    if not yes and not typer.confirm("Remove the account and its folders?", default=False):
+        raise typer.Exit(code=1)
+    home.clear_light()
+    try:
+        light_account.run_steps(steps, light_account.execute_step, tolerate_failure=True)
+    except light_account.LightSetupError as e:
+        raise _fail(str(e), 4) from e
+    typer.echo("removed. jobs run as you again after the node restarts")
 
 
 def add_ci(app: typer.Typer) -> None:

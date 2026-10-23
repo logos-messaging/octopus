@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import platform
+import sys
 from collections.abc import Callable
 from pathlib import Path
 
@@ -28,8 +29,10 @@ from ..team.keyfile import PASSPHRASE_ENV, KeyFileError, load_team_key, save_tea
 from ..team.sshsig import SshSigError, parse_authorized_keys, ssh_keygen_sign
 from ..team.state import DELEGATION_TTL_S
 from ..team.sync import build_list, key_to_text
+from . import light_wizard
 from .gh import Gh
 from .home import Allow, Home
+from .light import Light
 from .sandbox import Sandbox, SandboxError
 from .sandbox_setup import SandboxSetupError, enable, find_runtime
 
@@ -97,9 +100,12 @@ def init_ci(
     add(_prove(home, gh, now, ssh_key, login))
     if checks[-1].failed:
         return checks
-    if add(_sandbox(home, assume_yes)).failed:
+    if sys.platform == "darwin":
+        if add(light_wizard.offer_light(home, assume_yes=assume_yes)).failed:
+            return checks
+    elif add(_sandbox(home, assume_yes)).failed:
         return checks
-    if add(_job_access_notice(name, assume_yes, home.sandbox())).failed:
+    if add(_job_access_notice(name, assume_yes, home.sandbox(), home.light())).failed:
         return checks
     allow = home.allow()
     entry = target.name
@@ -227,7 +233,8 @@ JOB_ACCESS_NOTICE = (
     "A job from any branch of {name} can read your GitHub login (the gh token or the keychain),\n"
     "your SSH keys and agent, and everything else your user can read. Only serve repos whose\n"
     "writers you would trust with your account. On Linux, run jobs in a container instead:\n"
-    "octopus ci sandbox enable --image <image>. A macOS VM sandbox is not built yet."
+    "octopus ci sandbox enable --image <image>. On a Mac, octopus ci light install runs them as a\n"
+    "separate account instead."
 )
 
 
@@ -276,15 +283,25 @@ def _sandbox(home: Home, assume_yes: bool) -> Check:
     return Check("sandbox", Status.CHANGED, f"jobs run in {image.strip()} ({runtime})")
 
 
-def _job_access_notice(name: str, assume_yes: bool, sandbox: Sandbox | None = None) -> Check:
+def _job_access_notice(
+    name: str, assume_yes: bool, sandbox: Sandbox | None = None, light: Light | None = None
+) -> Check:
     """Say what a job can reach, and make the owner agree before the repo is allowed."""
+    who = "as you"
     if sandbox is not None:
         typer.echo(SANDBOX_NOTICE.format(name=name, image=sandbox.image, network=sandbox.network))
+    elif light is not None:
+        typer.echo(
+            light_wizard.LIGHT_NOTICE.format(
+                name=name, account=light.account, network=light.network
+            )
+        )
+        who = f"as {light.account}"
     else:
         typer.echo(JOB_ACCESS_NOTICE.format(name=name))
     if assume_yes:
         return Check("job access", Status.OK, "acknowledged with --yes")
-    if not typer.confirm(f"Allow jobs of {name} to run on this machine, as you?", default=False):
+    if not typer.confirm(f"Allow jobs of {name} to run on this machine, {who}?", default=False):
         return Check("job access", Status.FAIL, "not allowed: nothing was changed from here")
     return Check("job access", Status.OK, "acknowledged")
 

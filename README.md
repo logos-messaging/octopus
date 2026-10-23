@@ -43,6 +43,8 @@ registers a GitHub runner, the second joins a team and registers nothing.
 
 ```
 octopus ci init owner/repo                 # join the team of a repo (docs/decentralized-ci.md)
+octopus ci light install|status|disable   # macOS: run jobs as a dedicated 'octopus' account
+octopus ci uninstall                       # remove that account and its folders
 octopus init owner/repo                    # register this machine as a GitHub runner, as a service (docs/manual-runner.md)
 octopus init --role manual                 # the same, with questions
 octopus runner unregister-manual <repo>    # remove that runner

@@ -186,7 +186,67 @@ used: lists are re-published every 5 minutes and on request.
   `SSH_AUTH_SOCK` and the team passphrase from the job environment, which hides them from a
   careless script and no more. `octopus ci init` prints this and asks the owner to confirm
   (`--yes` skips the question, not the notice). Only serve repos whose writers you would trust
-  with your account, or turn on the container sandbox below (Linux hosts).
+  with your account, or isolate the jobs: the light level on a Mac (next section), or the container
+  sandbox on Linux.
+
+## Light isolation: jobs as a dedicated account (macOS hosts)
+
+On a Mac, `octopus ci init` offers to run jobs as a separate account instead of as you. It
+explains first, shows every command, and needs the admin password once (`sudo`). Without a
+terminal it changes nothing and points at `octopus ci light install`.
+
+What it sets up (`octopus ci light install`):
+- a hidden, non-admin account `octopus` (uid 300 to 399, no login password, no `sudo`, no
+  keychain, a private home), and a group `octopus-ci`;
+- a work root `/Users/Shared/octopus-work` (mode 2770, your user and the group) where each job gets
+  its own directory;
+- one sudo rule, `<you> ALL=(octopus) NOPASSWD: ALL` in `/etc/sudoers.d/octopus-ci`, checked with
+  `visudo -cf` before it is installed. It lets you run commands as `octopus` (down in privilege),
+  never the other way round.
+
+What happens to a job:
+1. The node clones the commit with your git credentials (the job never has them), then copies the
+   tree **without `.git`** into the work root. Your user never runs git or follows paths there
+   after the job starts, so a planted hook or symlink cannot run as you.
+2. The script runs as `octopus` under a Seatbelt profile (`sandbox-exec`) with an allow-listed
+   environment: no `GH_TOKEN`, no SSH agent. `HOME` and `TMPDIR` are inside the job directory.
+3. The profile denies reading `/Users` and `/Volumes` (except the job directory), writing outside
+   the job directory and the temporary folders, every connection to `localhost` (databases and dev
+   servers on `127.0.0.1` are reachable by any local user otherwise), and `launchctl`, `at`,
+   `crontab`, `sudo` and `su`. `--network none` cuts the network completely. Limits: open files,
+   processes and CPU seconds, plus the job timeout.
+4. After the job, the directory is deleted (as `octopus`, which owns what the job made) and every
+   process of the account is killed, also when the node starts. This is why a node in this level
+   runs one job at a time.
+
+Every job log starts with `octopus: isolation: light (account octopus, ...)`, and
+`octopus ci status` shows the level. If the account, the sudo rule or `sandbox-exec` is missing,
+the leg fails with exit code 126 and the script does not run on your user.
+
+`octopus ci light status` checks it, `octopus ci light disable` goes back to running as you,
+`octopus ci uninstall` removes the account, its home, the group, the sudo rule and the work root
+(it shows the commands first).
+
+Limits to know:
+- **It is a policy on a shared kernel, not a virtual machine.** A kernel bug could escape it.
+- The wizard checks that the account cannot read your `~/.ssh`, `~/.aws`, `~/.gitconfig`, shell
+  history, keychains, Documents, Desktop and Downloads, and warns about any it can. A macOS home
+  folder is world-readable at its top level by default, so keep dotfiles at mode 600 or 700.
+- The profile cannot allow "the internet but not the LAN": it either allows the network or not.
+- Tools installed under your home (`nvm`, `rustup`, `pyenv`) are not visible to `octopus`. Install
+  them system-wide (Homebrew's `/opt/homebrew` is readable), or let the repo's own `ci.sh` or
+  Makefile install what it needs in the job directory. Every job starts with an empty home, so
+  caches are cold.
+- No signing identities or secrets reach a node, so a job that signs with a certificate belongs on
+  a hosted runner. Builds and tests, ad-hoc signing (`codesign -s -`) and `CODE_SIGNING_ALLOWED=NO`
+  work. The account has no login session or keychain.
+- A managed Mac may forbid creating accounts or files in `/etc/sudoers.d`: ask your IT admin to
+  allow it. The step fails without leaving anything half-installed (it undoes what it did).
+- `sandbox-exec` is deprecated by Apple but still shipped. The profile lives in one module
+  (`octopus/ci/light_profile.py`) so it can be replaced.
+- Not done yet: running the same level on Linux, a per-repo build cache, telling other nodes and
+  the submitter which level a node uses (that needs a protocol change), and a way to require this
+  level (today a node that declines runs jobs as you, with the notice above).
 
 ## Sandbox: jobs in a container (Linux hosts)
 
@@ -255,9 +315,9 @@ iptables -I INPUT -i docker0 -m conntrack --ctstate NEW -j DROP   # containers t
 
 Where possible, make the node and any local service listen on `127.0.0.1` only.
 
-Limits: Linux hosts only. A `macos` leg needs a macOS VM (for example Tart), which is not built:
-`enable` refuses on macOS, and a node with a sandbox configured on another OS fails the leg with
-exit code 126 rather than running it unprotected. This is container isolation (shared kernel), not
+Limits: Linux hosts only. On a Mac, use the light level above (macOS has no containers): `enable`
+refuses on macOS, and a node with a sandbox configured on another OS fails the leg with exit code
+126 rather than running it unprotected. This is container isolation (shared kernel), not
 a VM. Not yet verified against a real Docker or Podman, only against a fake runtime in the tests.
 - Membership: team key -> signed member list (or a delegation, 30 days, scoped to one org/repo) ->
   GitHub login -> SSH signature of the node's keys (checked against `github.com/<login>.keys`) ->
@@ -322,4 +382,4 @@ one lost announce does not make a leg run twice).
   one to two calls per 10 s per running leg) are assumed from the API docs. A leg that is still
   waiting or claiming is not checked, only a running one.
 - Speed and cost of a real pipeline: nothing is compared with a hosted run yet.
-- Windows nodes, RSA SSH keys, a sandbox for jobs, membership removal before the next sync.
+- Windows nodes, RSA SSH keys, a sandbox for jobs on Windows, membership removal before the next sync.

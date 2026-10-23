@@ -22,7 +22,7 @@ Octopus runs GitHub Actions jobs on team members' laptops, coordinated over logo
 
 ### 1. Running team PR code on the laptop
 - **Today**: the trust policy runs only same-repo `push`/`pull_request` jobs from org members (see "Trust policy"). Each job runs in its own work dir, which is deleted afterwards, and the process tree is killed on timeout or stop.
-- **Residual**: there is **no sandbox**. The job runs as the lender's user, so it can read the lender's files, use their network and persist things outside the work dir. A compromised or malicious member's PR owns the laptop.
+- **Residual**: without isolation the job runs as the lender's user, so it can read the lender's files, use their network and persist things outside the work dir: a compromised or malicious member's PR owns the laptop. Decentralized-CI nodes can isolate jobs: a container on Linux, and on a Mac the **light level**, a dedicated non-admin `octopus` account under a Seatbelt profile (see `docs/decentralized-ci.md`). The light level keeps the lender's files, keys, keychain and GitHub login out of reach and wipes the job's home every time, but it shares the host kernel (a kernel or sandbox bug could escape it), cannot block the LAN selectively, and a node that declines still runs jobs as the lender. Jobs that need signing secrets are not supported on nodes.
 - **Harden**: run `octopus runner start` as a dedicated user, in a VM or in a container; keep no credentials, SSH keys or browser sessions on that machine; restrict network egress to GitHub, package registries and the coordinator.
 
 ### 2. Secret exposure

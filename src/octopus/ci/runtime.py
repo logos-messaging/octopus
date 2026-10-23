@@ -17,6 +17,8 @@ from .engine import CiConfig, CiNode
 from .exec import GhRunProbe, GhStatusPoster, GitExecutor
 from .gh import Gh
 from .home import Home
+from .isolation import Isolation
+from .light import Light, LightError
 from .messages import CI_TOPIC, ListMsg, ListRequest
 from .sandbox import SandboxError
 
@@ -73,10 +75,8 @@ class CiRuntime:
         for ml in home.lists():
             self.team.accept_list(ml)
         allow = home.allow()
-        try:
-            sandbox = home.sandbox() if executor is None else None
-        except SandboxError as e:
-            raise RuntimeError_(f"{e}: run: octopus ci sandbox enable or disable") from e
+        isolation = None if executor is not None else self._isolation(home, settings)
+        self._light = isolation if isinstance(isolation, Light) else None
         self.node = CiNode(
             transport=transport,
             team=self.team,
@@ -84,7 +84,7 @@ class CiRuntime:
             enc_key=enc_key,
             sign_key=sign_key,
             verifier=verifier or OidcVerifier("octopus-ci"),
-            executor=executor or GitExecutor(home.work_dir, sandbox=sandbox),
+            executor=executor or GitExecutor(home.work_dir, isolation=isolation),
             status=status or GhStatusPoster(),
             probe=probe or GhRunProbe(),
             config=CiConfig(
@@ -103,7 +103,33 @@ class CiRuntime:
         self._last_publish = -1e18
         self.public_key = encode_public_key(enc_key.public_key())
 
+    @staticmethod
+    def _isolation(home: Home, settings: Settings) -> Isolation | None:
+        try:
+            sandbox = home.sandbox()
+            light = home.light()
+        except SandboxError as e:
+            raise RuntimeError_(f"{e}: run: octopus ci sandbox enable or disable") from e
+        except LightError as e:
+            raise RuntimeError_(f"{e}: run: octopus ci light install or disable") from e
+        if sandbox is not None and light is not None:
+            raise RuntimeError_(
+                "both a container sandbox and the light level are on: "
+                "run: octopus ci sandbox disable, or: octopus ci light disable"
+            )
+        if light is not None and settings.capacity > 1:
+            raise RuntimeError_(
+                f"the light level runs one job at a time, not {settings.capacity}: use capacity 1"
+            )
+        return light or sandbox
+
     def start(self) -> None:
+        if self._light is not None:
+            why = self._light.supported()
+            if why is not None:
+                log.error("the light level is not usable, every job will fail closed: %s", why)
+            else:
+                self._light.reap()
         self._transport.start()
         self.node.start()
         self._transport.publish(CI_TOPIC, ListRequest().model_dump_json().encode())

@@ -10,6 +10,7 @@ from pathlib import Path
 
 from ..crypto import load_or_create_private_key, load_or_create_signing_key
 from ..team import MemberList, NodeProof
+from .light import Light, LightError
 from .sandbox import Sandbox, SandboxError
 
 CI_DIR = "ci"
@@ -190,3 +191,25 @@ class Home:
         except OSError as e:
             raise SandboxError(f"could not read the sandbox settings: {e}") from e
         return Sandbox.loads(text)
+
+    # light isolation
+
+    def save_light(self, light: Light) -> None:
+        self._write("light.json", light.dumps())
+
+    def clear_light(self) -> bool:
+        try:
+            self._path("light.json").unlink()
+        except FileNotFoundError:
+            return False
+        return True
+
+    def light(self) -> Light | None:
+        """The light-level settings, or None. Raises on a corrupt file."""
+        try:
+            text = self._path("light.json").read_text()
+        except FileNotFoundError:
+            return None
+        except OSError as e:
+            raise LightError(f"could not read the light settings: {e}") from e
+        return Light.loads(text)
