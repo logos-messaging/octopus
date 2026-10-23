@@ -19,7 +19,7 @@ import subprocess
 import sys
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from pathlib import Path
+from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 from typing import ClassVar
 
 from .light_profile import NETWORKS, render
@@ -52,6 +52,13 @@ def _run(argv: list[str]) -> subprocess.CompletedProcess:
     )
 
 
+def pure_path(text: str) -> PurePath:
+    """The path as written, whatever OS parses it (the settings are checked on any host)."""
+    if re.match(r"[A-Za-z]:[\\/]", text) or "\\" in text:
+        return PureWindowsPath(text)
+    return PurePosixPath(text)
+
+
 def valid_account(name: str) -> bool:
     return bool(_ACCOUNT.fullmatch(name)) and name not in _RESERVED
 
@@ -72,7 +79,7 @@ class Light:
     def __post_init__(self) -> None:
         if not valid_account(self.account):
             raise LightError(f"invalid account name: {self.account}")
-        root = Path(self.work_root)
+        root = pure_path(self.work_root)
         if (
             not root.is_absolute()
             or len(root.parts) < 3

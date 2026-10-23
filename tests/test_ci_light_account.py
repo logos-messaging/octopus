@@ -49,16 +49,29 @@ def test_the_account_is_usable_and_not_an_administrator(account):
     assert state.exists and state.sudo_ok and not state.admin
 
 
-def test_it_cannot_read_the_owners_files(account):
-    owner_home = Path.home()
-    secret = owner_home / ".ssh" / "octopus-test-secret"
-    secret.parent.mkdir(exist_ok=True, mode=0o700)
-    secret.write_text("secret")
-    secret.chmod(0o600)
+def test_it_cannot_read_what_the_owner_keeps_private(account):
+    """A private folder is out of reach; an open one is not (the control proves the test works)."""
+    private = Path(tempfile.mkdtemp(dir=Path.home(), prefix=".octopus-test-private-"))
+    opened = Path(tempfile.mkdtemp(dir=Path.home(), prefix=".octopus-test-open-"))
     try:
-        assert light_account.readable_secrets(str(owner_home)) == []
+        private.chmod(0o700)
+        (private / "secret").write_text("secret")
+        opened.chmod(0o755)
+        (opened / "note").write_text("note")
+        (opened / "note").chmod(0o644)
+
+        def readable(path):
+            return subprocess.run(
+                ["sudo", "-n", "-u", ACCOUNT, "/bin/test", "-r", str(path)], check=False
+            ).returncode == 0
+
+        assert not readable(private / "secret") and not readable(private)
+        assert readable(opened / "note"), "control: the account reads what is world-readable"
     finally:
-        secret.unlink(missing_ok=True)
+        import shutil
+
+        shutil.rmtree(private, ignore_errors=True)
+        shutil.rmtree(opened, ignore_errors=True)
 
 
 def test_a_job_runs_as_the_account_and_leaves_nothing(tmp_path, account):

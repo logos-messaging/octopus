@@ -12,9 +12,8 @@ import re
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
 
-from .light import ACCOUNT, GROUP, WORK_ROOT, Light, LightError, valid_account
+from .light import ACCOUNT, GROUP, WORK_ROOT, Light, LightError, pure_path, valid_account
 
 SUDOERS_FILE = "/etc/sudoers.d/octopus-ci"
 UID_RANGE = (300, 399)  # below 500: hidden from the login window
@@ -177,7 +176,7 @@ def uninstall_steps(
     expected = f"/Users/{account}"
     if home_dir != expected:
         raise LightError(f"refusing to delete a home that is not {expected}: {home_dir}")
-    root = Path(work_root)
+    root = pure_path(work_root)
     if len(root.parts) < 3 or ".." in root.parts or not root.name.startswith("octopus"):
         raise LightError(f"refusing to delete this work root: {work_root}")
     return [

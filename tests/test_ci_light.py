@@ -23,6 +23,7 @@ from octopus.github.setup import Status
 cli = CliRunner()
 
 macos_only = pytest.mark.skipif(sys.platform != "darwin", reason="Seatbelt is macOS only")
+posix_only = pytest.mark.skipif(sys.platform == "win32", reason="nodes run on Linux and macOS")
 
 
 def root_of(tmp_path) -> str:
@@ -131,6 +132,7 @@ def test_supported_says_why_not(tmp_path, monkeypatch):
 # --- the copy the job gets ----------------------------------------------------------------
 
 
+@posix_only
 def test_the_job_gets_a_copy_without_git_and_symlinks_are_not_followed(tmp_path):
     work = tmp_path / "checkout"
     (work / ".git" / "hooks").mkdir(parents=True)
@@ -450,6 +452,7 @@ def fake_sudo(tmp_path, monkeypatch):
     monkeypatch.setattr(Light, "supported", lambda self, run=None: None)
 
 
+@posix_only
 def test_a_host_job_says_so_in_its_log(tmp_path):
     src, sha = make_repo(tmp_path, "echo hi\n")
     lines = []
