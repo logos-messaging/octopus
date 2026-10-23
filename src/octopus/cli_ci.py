@@ -45,6 +45,9 @@ FollowOpt = typer.Option(
     help="Stay until every leg taken ends: print its log, report its result, fall back when "
     "its machine goes silent.",
 )
+HostedOpt = typer.Option(
+    [], "--hosted", help="An OS that always runs on GitHub (repeatable); only shown in the summary."
+)
 SilentOpt = typer.Option(
     90.0, "--silent-timeout", help="With --follow: seconds of silence after which a machine is lost."
 )
@@ -197,6 +200,7 @@ def ci_submit(
     follow: bool = FollowOpt,
     silent_timeout: float = SilentOpt,
     max_run: float = MaxRunOpt,
+    hosted: list[str] = HostedOpt,
 ) -> None:
     """Ask the fleet to run the legs of this workflow run; print what falls back to GitHub.
 
@@ -294,7 +298,7 @@ def ci_submit(
     for os_name, outcome in result.outcomes.items():
         if outcome.get("state") != "cancelled" and outcome.get("detail"):
             typer.echo(f"  {os_name}: {_describe(outcome)}")
-    _write_summary(render_summary(list(oses), result))
+    _write_summary(render_summary(list(oses), result, context=_context(), hosted=hosted))
     _write_outputs(sorted(result.handled), result.unhandled, failed)
     _exit_now()
 
@@ -317,6 +321,18 @@ def _settle(result) -> list[str]:
         elif state in FAILED_STATES:
             failed.append(os_name)
     return sorted(failed)
+
+
+def _context() -> dict[str, str]:
+    """Repo, commit and run of the Actions environment, for the title of the summary."""
+    e = os.environ
+    return {
+        "repo": e.get("GITHUB_REPOSITORY", ""),
+        "sha": e.get("GITHUB_SHA", ""),
+        "run": e.get("GITHUB_RUN_ID", ""),
+        "attempt": e.get("GITHUB_RUN_ATTEMPT", ""),
+        "server": e.get("GITHUB_SERVER_URL", "https://github.com"),
+    }
 
 
 def _short(text: str) -> str:
@@ -346,7 +362,7 @@ def _fall_back_all(oses: list[str], reason: str) -> None:
     from .ci.summary import render as render_summary
 
     result = SubmitResult(unhandled=list(oses), reasons={o: reason for o in oses})
-    _write_summary(render_summary(list(oses), result))
+    _write_summary(render_summary(list(oses), result, context=_context()))
     _write_outputs([], list(oses), [])
 
 
@@ -354,7 +370,8 @@ def _write_summary(markdown: str) -> None:
     """Append to the job summary of the workflow run, when running in GitHub Actions."""
     path = os.environ.get("GITHUB_STEP_SUMMARY")
     if path:
-        with open(path, "a") as f:
+        # GitHub reads the summary as UTF-8; Windows would write it as cp1252 and fail on the icons
+        with open(path, "a", encoding="utf-8", newline="\n") as f:
             f.write(markdown + "\n")
 
 
@@ -366,7 +383,7 @@ def _write_outputs(handled: list[str], unhandled: list[str], failed: list[str] |
         f"failed={json.dumps(failed or [])}",
     ]
     if out:
-        with open(out, "a") as f:
+        with open(out, "a", encoding="utf-8", newline="\n") as f:
             f.write("\n".join(lines) + "\n")
     else:
         typer.echo("\n".join(lines))

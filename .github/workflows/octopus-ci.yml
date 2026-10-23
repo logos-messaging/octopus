@@ -91,6 +91,7 @@ jobs:
         env:
           OCTOPUS_REF: ${{ steps.ref.outputs.sha }}
           INPUT_OS: ${{ inputs.os }}
+          INPUT_HOSTED: ${{ inputs.hosted }}
           INPUT_WAIT: ${{ inputs.wait }}
           INPUT_BUSY_WAIT: ${{ inputs.busy-wait }}
           INPUT_MAX_RUN: ${{ inputs.max-run }}
@@ -104,6 +105,10 @@ jobs:
           args=()
           for os in $(echo "$INPUT_OS" | python -c 'import json,sys; print(*json.load(sys.stdin))'); do
             args+=(--os "$os")
+          done
+          # only shown in the summary: the hosted legs run in their own job
+          for os in $(echo "$INPUT_HOSTED" | python -c 'import json,sys; print(*json.load(sys.stdin))'); do
+            args+=(--hosted "$os")
           done
           octopus ci submit "${args[@]}" --team-key "$team_key" --wait "$INPUT_WAIT" \
             --busy-wait "$INPUT_BUSY_WAIT" --follow --max-run "$INPUT_MAX_RUN" \

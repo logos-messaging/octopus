@@ -134,7 +134,7 @@ def test_outputs_include_the_failed_legs(tmp_path, monkeypatch):
     out = tmp_path / "out"
     monkeypatch.setenv("GITHUB_OUTPUT", str(out))
     cli_ci._write_outputs(["linux"], ["macos"], ["linux"])
-    written = dict(line.split("=", 1) for line in out.read_text().splitlines())
+    written = dict(line.split("=", 1) for line in out.read_text(encoding="utf-8").splitlines())
     assert json.loads(written["failed"]) == ["linux"]
     assert json.loads(written["unhandled"]) == ["macos"]
 
@@ -221,3 +221,91 @@ def test_the_duration_is_short_and_absent_when_unknown():
 
     assert duration(0.4) == "0s" and duration(59.6) == "1m00s" and duration(104) == "1m44s"
     assert duration(None) == "" and duration(-1) == "" and duration("x") == ""
+
+
+# the job summary of the run page
+
+CTX = {
+    "repo": "acme/app",
+    "sha": "b638772" + "0" * 33,
+    "run": "123",
+    "attempt": "2",
+    "server": "https://github.com",
+}
+
+
+def _ok_result():
+    return SubmitResult(
+        handled={"linux": "n1", "macos": "n2"},
+        names={"linux": "Fabiana VPS", "macos": "Ivan laptop"},
+        logins={"linux": "bot", "macos": "ivan"},
+        outcomes={
+            "linux": {"state": "success", "exit": 0, "seconds": 106.0},
+            "macos": {"state": "success", "exit": 0, "seconds": 192.0},
+        },
+    )
+
+
+def test_the_summary_says_first_that_everything_on_team_machines_passed():
+    text = render(["linux", "macos"], _ok_result(), context=CTX, hosted=["windows"])
+    lines = text.splitlines()
+    assert lines[0] == "### Octopus CI"
+    assert lines[2] == "✅ every leg on a team machine passed"
+    assert "`acme/app` @ `b638772`" in text
+    assert "[run 123](https://github.com/acme/app/actions/runs/123), attempt 2" in text
+    assert "| ✅ linux | **Fabiana VPS** (bot)" in text and "**success** in 1m46s" in text
+    assert "| ✅ macos | **Ivan laptop** (ivan)" in text and "in 3m12s" in text
+    assert "| ☁️ windows | GitHub-hosted runner | always runs on GitHub |" in text
+    assert "**Team machines:** 2 of 2 legs passed" in text
+    assert "**always on GitHub:** windows" in text
+
+
+def test_the_summary_shows_a_failed_leg_and_a_fallback_in_the_verdict_and_the_tally():
+    result = SubmitResult(
+        handled={"linux": "n1"},
+        names={"linux": "Fabiana VPS"},
+        logins={"linux": "bot"},
+        outcomes={"linux": {"state": "failure", "exit": 1, "seconds": 51.0}},
+        unhandled=["macos"],
+        reasons={"macos": "no team machine of this OS was online"},
+    )
+    text = render(["linux", "macos"], result, context=CTX)
+    assert "❌ a leg failed on a team machine" in text
+    assert "| ❌ linux |" in text and "**failure (exit code 1)** in 51s" in text
+    assert "| 🔁 macos | GitHub-hosted runner | no team machine of this OS was online |" in text
+    assert "0 of 2 legs passed, 1 failed" in text and "**fell back to GitHub:** 1" in text
+
+
+def test_the_summary_warns_when_nothing_ran_on_a_team_machine():
+    result = SubmitResult(unhandled=["linux"], reasons={"linux": "no answer from the fleet"})
+    text = render(["linux"], result, context=CTX)
+    assert "⚠️ no team machine took a leg: everything runs on GitHub" in text
+    assert "**Team machines:** 0 of 1 legs passed" in text
+
+
+def test_the_summary_without_the_run_context_still_renders():
+    text = render(["linux", "macos"], _ok_result())
+    assert text.startswith("### Octopus CI\n\n✅") and "actions/runs" not in text
+    rows = [ln for ln in text.splitlines() if ln.startswith("| ")]
+    assert len(rows) == 4 and all(ln.count("|") == 4 for ln in rows)
+
+
+def test_the_run_context_cannot_inject_markup_into_the_summary():
+    ctx = {"repo": "a/b](http://evil) x", "sha": "abc`def", "run": "1)\n#", "attempt": "2"}
+    text = render(["linux"], _ok_result(), context=ctx)
+    head = text.split("| Leg |")[0]
+    assert head.count("](") == 1, "only the link to the run"
+    assert "](http://evil" not in head
+    assert head.count("`") == 4, "two code spans: the repo and the commit"
+    assert "\n#" not in head.split("### Octopus CI", 1)[1]
+
+
+def test_the_summary_file_is_written_as_utf8_with_the_icons(tmp_path, monkeypatch):
+    """Windows writes text as cp1252 unless told otherwise, and the icons then raise."""
+    out = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(out))
+    cli_ci._write_summary(render(["linux"], _ok_result(), context=CTX, hosted=["windows"]))
+    raw = out.read_bytes()
+    assert "✅".encode() in raw and "☁️".encode() in raw
+    assert b"\r\n" not in raw, "GitHub reads \\n line ends"
+    assert raw.decode("utf-8").startswith("### Octopus CI\n")
