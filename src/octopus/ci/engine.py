@@ -545,6 +545,7 @@ class CiNode:
         log.info("CI leg started: %s at %s", info.leg_id, info.sha)
         send = self._open_reply_channel(leg, chan)
         state, detail, code = "error", "", -1
+        began = self._clock.monotonic()
         try:
             self._post_status(info, "pending", f"running on {self._machine()} ({info.os})")
             result = self._executor.run(
@@ -564,14 +565,20 @@ class CiNode:
         if stale is not None:
             # the state and `done` went out when the leg was found stale; no status, see _probe_leg
             log.info("CI leg finished: %s: stopped: %s", info.leg_id, stale)
-            send({"t": "result", "state": "cancelled", "exit": code, "detail": stale})
+            send(
+                {"t": "result", "state": "cancelled", "exit": code, "detail": stale,
+                 "seconds": round(self._clock.monotonic() - began, 1)}
+            )
         else:
             log.info("CI leg finished: %s: %s%s", info.leg_id, state, " (fenced)" if fenced else "")
         if stale is None and not fenced:
             self._post_status(
                 info, state, f"{state} on {self._machine()}" + (f": {detail}" if detail else "")
             )
-            send({"t": "result", "state": state, "exit": code, "detail": detail})
+            send(
+                {"t": "result", "state": state, "exit": code, "detail": detail,
+                 "seconds": round(self._clock.monotonic() - began, 1)}
+            )
             with self._lock:
                 self._send_leg("done", leg, state=state)
                 self._announce(self._clock.monotonic())

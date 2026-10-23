@@ -137,3 +137,87 @@ def test_outputs_include_the_failed_legs(tmp_path, monkeypatch):
     written = dict(line.split("=", 1) for line in out.read_text().splitlines())
     assert json.loads(written["failed"]) == ["linux"]
     assert json.loads(written["unhandled"]) == ["macos"]
+
+
+# a clear output: which machine, how long, what ended how
+
+
+def _taken(world, login="alice", name_of=None, exit_code=0):
+    a = world.add(login)
+    a.executor.exit_code = exit_code
+    world.settle()
+    sub = make_submitter(world)
+    result = sub.submit(legs_for(world, "linux"))
+    lines = []
+    sub.follow(result, lambda o, line: lines.append((o, line)), timeout_s=60)
+    return result, lines
+
+
+def test_the_submitter_knows_the_machine_by_name_and_owner(world):
+    result, _ = _taken(world)
+    assert result.names["linux"] == "alice" and result.logins["linux"] == "alice"
+    from octopus.ci.summary import machine
+
+    assert machine(result, "linux") == "alice (alice)"
+
+
+def test_the_result_message_says_how_long_the_script_ran(world):
+    result, _ = _taken(world)
+    seconds = result.outcomes["linux"]["seconds"]
+    assert isinstance(seconds, float) and seconds >= 0
+
+
+def test_the_log_block_names_the_machine_the_state_and_the_exit_code(world):
+    from octopus.ci.summary import render_text
+
+    result, _ = _taken(world, exit_code=3)
+    result.outcomes["linux"]["seconds"] = 104.0
+    text = render_text(["linux", "windows"], result)
+    lines = text.splitlines()
+    assert lines[0] == "Octopus CI result"
+    assert "linux" in lines[1] and "failure (exit code 3)" in lines[1]
+    assert "alice (alice)" in lines[1] and "1m44s" in lines[1]
+    assert "windows" in lines[2] and "GitHub" in lines[2] and "hosted runner" in lines[2]
+
+
+def test_the_log_block_says_when_no_log_came_from_the_machine():
+    from octopus.ci.summary import render_text
+
+    result = SubmitResult(
+        handled={"linux": "n1"},
+        names={"linux": "ces"},
+        logins={"linux": "bot"},
+        outcomes={"linux": {"state": "success", "exit": 0, "seconds": 61.0}},
+    )
+    text = render_text(["linux"], result)
+    assert "ces (bot)" in text and "1m01s" in text and "[log not received]" in text
+    result.lines["linux"] = 40
+    assert "[log not received]" not in render_text(["linux"], result)
+
+
+def test_the_markdown_table_shows_the_machine_owner_and_duration():
+    result = SubmitResult(
+        handled={"macos": "jqf7sjhugxa7j7ux"},
+        names={"macos": "Ivans-MacBook"},
+        logins={"macos": "ivansete-status"},
+        outcomes={"macos": {"state": "success", "exit": 0, "seconds": 182.0}},
+    )
+    text = render(["macos"], result)
+    assert "**Ivans-MacBook** (ivansete-status)" in text and "in 3m02s" in text
+    rows = [ln for ln in text.splitlines() if ln.startswith("| ")]
+    assert all(ln.count("|") == 4 for ln in rows)
+
+
+def test_a_name_with_markup_cannot_break_the_log_block():
+    from octopus.ci.summary import render_text
+
+    result = SubmitResult(handled={"linux": "n1"}, names={"linux": "evil|name\n`<x>`"})
+    text = render_text(["linux"], result)
+    assert "\n`" not in text and "|" not in text and len(text.splitlines()) == 2
+
+
+def test_the_duration_is_short_and_absent_when_unknown():
+    from octopus.ci.summary import duration
+
+    assert duration(0.4) == "0s" and duration(59.6) == "1m00s" and duration(104) == "1m44s"
+    assert duration(None) == "" and duration(-1) == "" and duration("x") == ""
