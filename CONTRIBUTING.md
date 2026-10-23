@@ -56,3 +56,5 @@ Do not open public issues for vulnerabilities; contact the maintainers privately
 
 ## License
 By contributing you agree your work is licensed under MIT or Apache-2.0, at the project's option.
+
+<!-- demo: this line only exists to start a CI run for the video; the PR is closed unmerged -->
