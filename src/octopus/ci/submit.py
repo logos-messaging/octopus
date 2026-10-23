@@ -57,6 +57,8 @@ class SubmitResult:
     unhandled: list[str] = field(default_factory=list)
     reasons: dict[str, str] = field(default_factory=dict)  # os -> why it fell back
     outcomes: dict[str, dict] = field(default_factory=dict)  # os -> the node's result message
+    logins: dict[str, str] = field(default_factory=dict)  # os -> GitHub login of the node's owner
+    lines: dict[str, int] = field(default_factory=dict)  # os -> log lines received from the node
 
 
 class Submitter:
@@ -217,6 +219,7 @@ class Submitter:
             self._result.handled[leg.os] = msg.node_id
             self._result.enc_pubs[leg.os] = msg.proof.enc_pub
             self._result.names[leg.os] = msg.name
+            self._result.logins[leg.os] = msg.proof.login
 
     def follow(
         self,
@@ -273,6 +276,7 @@ class Submitter:
                         return
                     alive[os_name] = self._mono()
                     if msg.get("t") == "log":
+                        result.lines[os_name] = result.lines.get(os_name, 0) + 1
                         on_line(os_name, str(msg.get("line", "")))
                     elif msg.get("t") == "result":
                         results[os_name] = msg

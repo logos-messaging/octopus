@@ -137,6 +137,16 @@ class Home:
         raw = self._read_json("allow.json") or {}
         return Allow(list(raw.get("repos", [])), list(raw.get("orgs", [])))
 
+    def save_node_name(self, name: str) -> None:
+        self._write("node-name.txt", name.strip() + "\n")
+
+    def node_name(self) -> str | None:
+        """The name this machine shows in the logs of the submit job; None: its host name."""
+        try:
+            return self._path("node-name.txt").read_text().strip() or None
+        except OSError:
+            return None
+
     def save_extras(self, extras: dict[str, list[str]]) -> None:
         """Logins added by hand to a scope (`team sync --login`): every sync keeps them."""
         kept = {scope: sorted(set(logins)) for scope, logins in extras.items() if logins}

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from pathlib import Path
 from urllib.parse import quote
@@ -152,7 +153,7 @@ def ci_node(
             Settings(
                 os_name=os_name(),
                 arch=platform.machine().lower(),
-                name=platform.node().split(".")[0],
+                name=home.node_name() or platform.node().split(".")[0],
             ),
         )
         runtime.start()
@@ -208,6 +209,7 @@ def ci_submit(
     from .ci.messages import leg_audience, make_leg_id
     from .ci.submit import Leg, Submitter
     from .ci.summary import render as render_summary
+    from .ci.summary import render_text
     from .crypto import decode_signing_public, encode_public_key, generate_private_key
     from .team import TeamState
     from .transport.config import DEFAULT_LOG_LEVEL, env_log_level, runner_config
@@ -257,11 +259,22 @@ def ci_submit(
         )
         result = submitter.submit(legs)
         if follow and result.handled:
-            for os_name, node in result.handled.items():
-                typer.echo(f"{os_name}: taken by node {node}")
+            from .ci.summary import machine
+
+            sha = env.get("GITHUB_SHA", "")[:7]
+            typer.echo(f"Octopus CI: {repo} @ {sha or '?'}, run {run_id}")
+            for os_name in oses:
+                if os_name in result.handled:
+                    typer.echo(f"  {os_name}: taken by {machine(result, os_name)}")
+                else:
+                    typer.echo(
+                        f"  {os_name}: no team machine, runs on GitHub: "
+                        f"{result.reasons.get(os_name, 'not taken')}"
+                    )
+            typer.echo("The log of each leg follows, as [leg machine] lines.")
             submitter.follow(
                 result,
-                lambda o, line: typer.echo(f"[{o}] {line}"),
+                lambda o, line: typer.echo(f"[{o} {_short(machine(result, o))}] {line}"),
                 timeout_s=max_run,
                 silent_s=silent_timeout,
             )
@@ -271,13 +284,16 @@ def ci_submit(
         _exit_now()
         return
     failed = _settle(result)
-    for os_name, node in result.handled.items():
-        if os_name not in result.outcomes:
-            typer.echo(f"{os_name}: taken by node {node}")
+    if not follow:
+        from .ci.summary import machine
+
+        for os_name in oses:
+            if os_name in result.handled:
+                typer.echo(f"{os_name}: taken by {machine(result, os_name)}")
+    typer.echo(render_text(list(oses), result))
     for os_name, outcome in result.outcomes.items():
-        typer.echo(f"{os_name}: {_describe(outcome)}")
-    for os_name in result.unhandled:
-        typer.echo(f"{os_name}: no node ran it, falls back to GitHub: {result.reasons.get(os_name, '')}")
+        if outcome.get("state") != "cancelled" and outcome.get("detail"):
+            typer.echo(f"  {os_name}: {_describe(outcome)}")
     _write_summary(render_summary(list(oses), result))
     _write_outputs(sorted(result.handled), result.unhandled, failed)
     _exit_now()
@@ -301,6 +317,11 @@ def _settle(result) -> list[str]:
         elif state in FAILED_STATES:
             failed.append(os_name)
     return sorted(failed)
+
+
+def _short(text: str) -> str:
+    """A machine for the prefix of a log line: the name, without the login."""
+    return text.split(" (", 1)[0]
 
 
 def _describe(outcome: dict) -> str:
@@ -351,6 +372,35 @@ def _write_outputs(handled: list[str], unhandled: list[str], failed: list[str] |
         typer.echo("\n".join(lines))
 
 
+NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._()+-]{0,39}")
+
+
+@ci_app.command("name")
+def ci_name(
+    name: str | None = typer.Argument(None, help="The name to show; none: print the current one."),
+    reset: bool = typer.Option(False, "--reset", help="Go back to the host name."),
+    data_dir: Path | None = DataDirOpt,
+) -> None:
+    """The name of this machine in the logs and the summary of Octopus CI runs.
+
+    Default is the host name. Takes effect when the node restarts.
+    """
+    import platform
+
+    home = _home(data_dir)
+    if reset:
+        home.save_node_name("")
+        typer.echo("name: back to the host name, after the node restarts")
+        return
+    if name is None:
+        typer.echo(home.node_name() or platform.node().split(".")[0])
+        return
+    if not NAME_PATTERN.fullmatch(name.strip()):
+        raise _fail("a name is 1 to 40 letters, digits, spaces and . _ ( ) + -", 2)
+    home.save_node_name(name.strip())
+    typer.echo(f"name: {name.strip()}, after the node restarts (the service: restart it)")
+
+
 @ci_app.command("status")
 def ci_status(data_dir: Path | None = DataDirOpt) -> None:
     """Show what this machine knows: its proof, the team key and the member lists."""
@@ -364,6 +414,11 @@ def ci_status(data_dir: Path | None = DataDirOpt) -> None:
         left = (ml.not_after - time.time()) / 3600
         typer.echo(f"members     {ml.scope}: {len(ml.logins)} (v{ml.version}, {left:.0f} h left)")
     typer.echo(f"daily sync  {', '.join(home.scopes()) or 'off'}")
+    import platform
+
+    typer.echo(
+        f"name        {home.node_name() or platform.node().split('.')[0] + ' (host name)'}"
+    )
 
 
 # --- team -----------------------------------------------------------------------------

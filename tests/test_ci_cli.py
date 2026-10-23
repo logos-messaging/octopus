@@ -650,3 +650,25 @@ def test_team_show_says_which_logins_were_added_by_hand(machine, monkeypatch):
     assert _sync(tmp_path, "--repo", "acme/app", "--login", "octo-bot").exit_code == 0
     out = cli.invoke(app, ["team", "show", "--data-dir", str(tmp_path / "data")]).output
     assert "added by hand, kept by every sync: octo-bot" in out
+
+
+# the name of the machine in the logs
+
+
+def test_ci_name_sets_shows_and_resets_the_name(tmp_path):
+    data = str(tmp_path / "data")
+    out = cli.invoke(app, ["ci", "name", "--data-dir", data])
+    assert out.exit_code == 0 and out.output.strip()  # the host name
+    assert cli.invoke(app, ["ci", "name", "Ivan's Mac", "--data-dir", data]).exit_code == 2
+    out = cli.invoke(app, ["ci", "name", "Ivans MacBook (home)", "--data-dir", data])
+    assert out.exit_code == 0, out.output
+    assert cli.invoke(app, ["ci", "name", "--data-dir", data]).output.strip() == "Ivans MacBook (home)"
+    assert "Ivans MacBook (home)" in cli.invoke(app, ["ci", "status", "--data-dir", data]).output
+    assert cli.invoke(app, ["ci", "name", "--reset", "--data-dir", data]).exit_code == 0
+    assert Home(tmp_path / "data" / "ci").node_name() is None
+
+
+def test_ci_name_refuses_a_long_or_empty_name(tmp_path):
+    data = str(tmp_path / "data")
+    assert cli.invoke(app, ["ci", "name", "x" * 41, "--data-dir", data]).exit_code == 2
+    assert cli.invoke(app, ["ci", "name", "  ", "--data-dir", data]).exit_code == 2

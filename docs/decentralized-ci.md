@@ -108,6 +108,34 @@ price of never leaving a run without a result.
 Not done: the node still posts its own commit status when it can, so there can be two signals
 (this job and `octopus/ci (<os>)`). Removing it is a follow-up.
 
+### Reading the log of the submit job
+
+The log of `ci / submit` has three parts. Search for `Octopus CI` to jump between them:
+
+```
+Octopus CI: logos-messaging/octopus @ 83fda56, run 39874671400
+  linux: taken by ces (ivansete-octopus)
+  macos: taken by Ivans-MacBook (ivansete-status)
+The log of each leg follows, as [leg machine] lines.
+[macos Ivans-MacBook] All checks passed!
+[macos Ivans-MacBook] 1000 passed, 5 deselected in 154.28s (0:02:34)
+Octopus CI result
+  linux    success  ces (ivansete-octopus)           1m44s [log not received]
+  macos    success  Ivans-MacBook (ivansete-status)  3m02s
+  windows  GitHub   hosted runner                    always hosted
+```
+
+- **Who:** a machine shows as `name (GitHub login of its owner)`. The name is the host name; change
+  it with `octopus ci name "Ivans MacBook"` on that machine (it applies when the node restarts, and
+  `octopus ci status` shows it).
+- **How it ended:** the last block has one row per leg: `success`, `failure (exit code N)`,
+  `timeout`, `cancelled` or `GitHub` (a hosted runner ran it, with the reason). The time is how
+  long the script ran on the machine.
+- **`[log not received]`:** the leg ran and its result is known, but none of its output reached
+  this job (for example it joined after the machine had started the leg). The output is then on the
+  machine: `journalctl --user -u octopus-ci` on Linux, `~/Library/Logs/octopus/ci.log` on macOS.
+- The same table, in markdown, is in the job summary of the run.
+
 ## Busy machines: wait or fall back
 
 Nodes announce every 10 s whether they are busy (`busy`, `capacity`). Per OS, the submitter
