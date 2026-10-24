@@ -189,7 +189,7 @@ used: lists are re-published every 5 minutes and on request.
   with your account, or isolate the jobs: the light level on a Mac (next section), or the container
   sandbox on Linux.
 
-## Light isolation: jobs as a dedicated account (macOS hosts)
+## Light isolation: jobs as a dedicated account (macOS and Linux hosts)
 
 On a Mac, `octopus ci init` offers to run jobs as a separate account instead of as you. It
 explains first, shows every command, and needs the admin password once (`sudo`). Without a
@@ -244,9 +244,41 @@ Limits to know:
   allow it. The step fails without leaving anything half-installed (it undoes what it did).
 - `sandbox-exec` is deprecated by Apple but still shipped. The profile lives in one module
   (`octopus/ci/light_profile.py`) so it can be replaced.
-- Not done yet: running the same level on Linux, a per-repo build cache, telling other nodes and
+- Not done yet: a per-repo build cache, telling other nodes and
   the submitter which level a node uses (that needs a protocol change), and a way to require this
   level (today a node that declines runs jobs as you, with the notice above).
+
+### On Linux (bubblewrap)
+
+The same account, the same copy without `.git`, the same allow-listed environment and the same
+fail-closed rule, with a different sandbox: **bubblewrap** (`bwrap`). Install it with your package
+manager (`apt install bubblewrap`, `dnf install bubblewrap`). `octopus ci init` offers this level
+when you did not choose the container sandbox; `octopus ci light install` does it directly, and
+`octopus ci uninstall` removes it.
+
+- The account is a system account without login (`useradd --system`, shell `nologin`, home
+  `/var/lib/octopus`, mode 700), group `octopus-ci`, work root `/var/lib/octopus-work` (mode 2770),
+  and the same one sudo rule (`<you> ALL=(octopus) NOPASSWD: ALL`, checked with `visudo -cf`).
+- The job runs in a **mount namespace**: `/usr`, `/etc` and `/opt` read-only, the usual `/bin`
+  `/lib` links, a fresh `/proc`, `/dev` and `/tmp`, and the job directory as the only writable path.
+  **Your home, `/root`, `/var`, `/mnt` and `/media` do not exist for it**, which is stronger than
+  denying access to them. It also has its own process, IPC and hostname namespaces, no
+  capabilities, a new session (no terminal injection) and dies with the node, so nothing it
+  started survives it. `--network none` gives it no network at all.
+- **Services on `localhost` stay reachable** with the default network, because the job shares the
+  host's network namespace (macOS blocks them with its profile). A database or dev server on
+  `127.0.0.1` without a password is open to any local user: bind such services to a socket with
+  permissions, or use `--network none`. Selective blocking needs a user-space network
+  (`pasta`/`slirp4netns`), which is not built.
+- **User namespaces must be allowed.** Ubuntu 23.10 and later (and some hardened kernels) restrict
+  unprivileged user namespaces: `octopus ci light status` then says "bubblewrap cannot create a user
+  namespace". Either allow bubblewrap through an AppArmor profile (check your distribution's notes
+  for `bwrap`), or set `kernel.apparmor_restrict_unprivileged_userns=0` if you accept that for the
+  whole machine.
+- Order of preference: the container sandbox when you configured it, then bubblewrap. Landlock
+  (no extra package, kernel 5.13 or later) as a fallback when bubblewrap is missing is not built.
+- The `light` CI job runs this level with the real account on Ubuntu 22.04; other distributions are
+  not tested.
 
 ## Sandbox: jobs in a container (Linux hosts)
 

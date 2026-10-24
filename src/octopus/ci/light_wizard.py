@@ -19,20 +19,23 @@ import typer
 from ..github.setup import Check, Status
 from . import light_account
 from .home import Home
-from .light import ACCOUNT, WORK_ROOT, Light, LightError
+from .light import ACCOUNT, BUBBLEWRAP, WORK_ROOT, Light, LightError, default_backend, host_defaults
 
 EXPLANATION = f"""Jobs will run as a separate account, not as you.
-Octopus creates a hidden, non-admin account called "{ACCOUNT}" on this Mac and runs every CI job
-as that account, in a throwaway folder, under a sandbox profile. It has no admin rights, no
-keychain and no access to your files, SSH keys or GitHub login, so a job cannot read them.
+Octopus creates {{kind}} account called "{ACCOUNT}" on this {{machine}} and runs every CI job
+as that account, in a throwaway folder, {{how}}. It has no admin rights and no access to your
+files, SSH keys or GitHub login, so a job cannot read them.
 This needs your admin password (sudo) once. You will see each command first. To remove
 everything later: octopus ci uninstall.
 It is a policy on a shared kernel, not a virtual machine: see docs/threat-model.md."""
 
+MAC_HOW = "under a sandbox profile, with no keychain"
+LINUX_HOW = "in a bubblewrap sandbox where your home folder does not exist"
+
 LIGHT_NOTICE = (
-    "Jobs of {name} run as the account {account} under a sandbox profile: they cannot read your\n"
-    "files, SSH keys, keychain or GitHub login. With network {network} they still reach the\n"
-    "internet. See docs/decentralized-ci.md for what the profile does and does not stop."
+    "Jobs of {name} run as the account {account} in a sandbox: they cannot read your files, SSH\n"
+    "keys or GitHub login. With network {network} they still reach the network. See\n"
+    "docs/decentralized-ci.md for what the sandbox does and does not stop."
 )
 
 
@@ -54,8 +57,11 @@ def offer_light(
     terminal: Callable[[], bool] = has_terminal,
     owner: str | None = None,
     owner_home: str | None = None,
+    backend: str | None = None,
 ) -> Check:
-    """Offer the light level on a Mac, set it up when the user agrees."""
+    """Offer the light level, set it up when the user agrees."""
+    backend = backend or default_backend()
+    linux = backend == BUBBLEWRAP
     try:
         current = home.light()
     except LightError as e:
@@ -65,6 +71,10 @@ def offer_light(
         if why is not None:
             return Check("isolation", Status.FAIL, f"{why}")
         return Check("isolation", Status.OK, current.describe())
+    if linux:
+        problem = host_defaults().sandbox_problem(run)
+        if problem is not None:
+            return Check("isolation", Status.SKIPPED, f"{problem}; then: octopus ci light install")
     if not terminal():
         return Check(
             "isolation",
@@ -72,14 +82,23 @@ def offer_light(
             "needs the admin password in a terminal: run: octopus ci light install",
         )
     owner = owner or getpass.getuser()
-    say(EXPLANATION)
+    say(
+        EXPLANATION.format(
+            kind="a non-admin, no-login" if linux else "a hidden, non-admin",
+            machine="machine" if linux else "Mac",
+            how=LINUX_HOW if linux else MAC_HOW,
+        )
+    )
     tmp = _temp_name()
     try:
-        state = light_account.inspect(owner, ACCOUNT, run)
-        uid = state.uid if state.uid is not None else light_account.pick_uid(
-            run(["dscl", ".", "-list", "/Users", "UniqueID"]).stdout
-        )
-        steps = light_account.install_steps(owner, uid, tmp, exists=state.exists)
+        state = light_account.inspect(owner, ACCOUNT, run, backend)
+        if linux:
+            steps = light_account.install_steps_linux(owner, tmp, exists=state.exists)
+        else:
+            uid = state.uid if state.uid is not None else light_account.pick_uid(
+                run(["dscl", ".", "-list", "/Users", "UniqueID"]).stdout
+            )
+            steps = light_account.install_steps(owner, uid, tmp, exists=state.exists)
     except (LightError, light_account.LightSetupError) as e:
         return Check("isolation", Status.FAIL, str(e))
     say("These commands will run:")
@@ -89,7 +108,7 @@ def offer_light(
         return Check("isolation", Status.SKIPPED, "jobs run as you: octopus ci light install")
     try:
         light = light_account.install(
-            owner, execute=execute, run=run, say=say, sudoers_tmp=tmp
+            owner, execute=execute, run=run, say=say, sudoers_tmp=tmp, backend=backend
         )
     except (LightError, light_account.LightSetupError) as e:
         return Check("isolation", Status.FAIL, f"{e}; nothing was left half-installed")
