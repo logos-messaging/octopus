@@ -103,8 +103,15 @@ def init_ci(
     if sys.platform == "darwin":
         if add(light_wizard.offer_light(home, assume_yes=assume_yes)).failed:
             return checks
-    elif add(_sandbox(home, assume_yes)).failed:
-        return checks
+    else:
+        if add(_sandbox(home, assume_yes)).failed:
+            return checks
+        if (
+            sys.platform.startswith("linux")
+            and home.sandbox() is None
+            and add(light_wizard.offer_light(home, assume_yes=assume_yes)).failed
+        ):
+            return checks
     if add(_job_access_notice(name, assume_yes, home.sandbox(), home.light())).failed:
         return checks
     allow = home.allow()
@@ -233,8 +240,8 @@ JOB_ACCESS_NOTICE = (
     "A job from any branch of {name} can read your GitHub login (the gh token or the keychain),\n"
     "your SSH keys and agent, and everything else your user can read. Only serve repos whose\n"
     "writers you would trust with your account. On Linux, run jobs in a container instead:\n"
-    "octopus ci sandbox enable --image <image>. On a Mac, octopus ci light install runs them as a\n"
-    "separate account instead."
+    "octopus ci sandbox enable --image <image>. Or run them as a separate, sandboxed account:\n"
+    "octopus ci light install."
 )
 
 

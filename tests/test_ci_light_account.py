@@ -1,8 +1,8 @@
-"""The light level with the real `octopus` account: only on a Mac made for it (CI).
+"""The light level with the real `octopus` account: only on a machine made for it (CI).
 
 This creates a user, a group, a sudo rule and a work root on the machine and removes them at the
-end, so it never runs unless OCTOPUS_TEST_LIGHT_ACCOUNT=1 (the `light` job of ci.yml, on a hosted
-Mac with passwordless sudo).
+end, so it never runs unless OCTOPUS_TEST_LIGHT_ACCOUNT=1 (the `light` jobs of ci.yml, on hosted
+macOS and Ubuntu machines with passwordless sudo).
 """
 
 import getpass
@@ -17,15 +17,24 @@ from test_ci_light import leg, make_repo
 
 from octopus.ci import light_account
 from octopus.ci.exec import GitExecutor
-from octopus.ci.light import ACCOUNT, Light
+from octopus.ci.light import ACCOUNT, Light, default_backend, host_defaults
 
 pytestmark = [
     pytest.mark.needs_light_account,
     pytest.mark.skipif(
-        sys.platform != "darwin" or os.environ.get("OCTOPUS_TEST_LIGHT_ACCOUNT") != "1",
-        reason="creates a real account: set OCTOPUS_TEST_LIGHT_ACCOUNT=1 on a Mac made for it",
+        sys.platform not in ("darwin", "linux")
+        or os.environ.get("OCTOPUS_TEST_LIGHT_ACCOUNT") != "1",
+        reason="creates a real account: set OCTOPUS_TEST_LIGHT_ACCOUNT=1 on a machine made for it",
     ),
 ]
+
+
+if default_backend() == "seatbelt":
+    PLATFORM_CHECK = "/bin/launchctl list >/dev/null 2>&1 && echo LAUNCHCTL || echo launchctl-denied\n"
+    PLATFORM_EXPECT = "launchctl-denied"
+else:
+    PLATFORM_CHECK = "test -e /home && echo HOME-VISIBLE || echo home-hidden\n"
+    PLATFORM_EXPECT = "home-hidden"
 
 
 @pytest.fixture(scope="module")
@@ -37,9 +46,7 @@ def account():
     Path(tmp).unlink(missing_ok=True)
     yield light
     light_account.run_steps(
-        light_account.uninstall_steps(f"/Users/{ACCOUNT}"),
-        light_account.execute_step,
-        tolerate_failure=True,
+        light_account.uninstall_for(light), light_account.execute_step, tolerate_failure=True
     )
 
 
@@ -51,8 +58,8 @@ def test_the_account_is_usable_and_not_an_administrator(account):
 
 def test_it_cannot_read_what_the_owner_keeps_private(account):
     """A private folder is out of reach; an open one is not (the control proves the test works)."""
-    private = Path(tempfile.mkdtemp(dir=Path.home(), prefix=".octopus-test-private-"))
-    opened = Path(tempfile.mkdtemp(dir=Path.home(), prefix=".octopus-test-open-"))
+    private = Path(tempfile.mkdtemp(dir="/tmp", prefix="octopus-test-private-"))
+    opened = Path(tempfile.mkdtemp(dir="/tmp", prefix="octopus-test-open-"))
     try:
         private.chmod(0o700)
         (private / "secret").write_text("secret")
@@ -83,8 +90,8 @@ def test_a_job_runs_as_the_account_and_leaves_nothing(tmp_path, account):
             f"cat {owner_home}/owner-secret 2>/dev/null && echo READ-SECRET || echo secret-denied\n"
             f"touch {owner_home}/planted 2>/dev/null && echo PLANTED || echo plant-denied\n"
             "echo ghtoken=${GH_TOKEN:-none}\n"
-            "/bin/launchctl list >/dev/null 2>&1 && echo LAUNCHCTL || echo launchctl-denied\n"
-            "(sleep 300 &) ; echo started-background\n"
+            + PLATFORM_CHECK
+            + "(sleep 300 &) ; echo started-background\n"
         )
         src, sha = make_repo(tmp_path, script)
         lines = []
@@ -97,7 +104,7 @@ def test_a_job_runs_as_the_account_and_leaves_nothing(tmp_path, account):
         assert result.exit_code == 0, lines
         assert f"user={ACCOUNT}" in lines
         assert "secret-denied" in lines and "plant-denied" in lines
-        assert "launchctl-denied" in lines and "ghtoken=none" in lines
+        assert PLATFORM_EXPECT in lines and "ghtoken=none" in lines
         assert "READ-SECRET" not in lines and "PLANTED" not in lines
         assert not (owner_home / "planted").exists()
         assert list(Path(account.work_root).iterdir()) == []
@@ -112,7 +119,11 @@ def test_a_job_runs_as_the_account_and_leaves_nothing(tmp_path, account):
 
 
 def test_a_custom_light_level_refuses_without_the_account(tmp_path):
-    ghost = Light(account="octopus_missing", work_root=str(tmp_path / "octopus-work"))
+    ghost = Light(
+        account="octopus_missing",
+        work_root=str(tmp_path / "octopus-work"),
+        backend=host_defaults().backend,
+    )
     (tmp_path / "octopus-work").mkdir()
     src, sha = make_repo(tmp_path, "echo SHOULD-NOT-RUN\n")
     lines = []

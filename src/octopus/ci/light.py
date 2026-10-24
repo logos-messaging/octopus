@@ -1,11 +1,12 @@
-"""The light isolation level: jobs run as a dedicated `octopus` account under a Seatbelt profile.
+"""The light isolation level: jobs run as a dedicated `octopus` account in a sandbox.
 
 The node stays trusted: it clones the commit with the owner's git credentials, copies the tree
 (without `.git`) into a work root both accounts can use, and runs the script as the `octopus`
-account through one `sudo` rule. That account has no admin rights, no keychain and no access to
-the owner's files, and the profile (light_profile.py) narrows what the process can touch. It
-shares the host kernel, so it is a policy and not a boundary like a VM (docs/threat-model.md).
-macOS hosts only for now.
+account through one `sudo` rule. That account has no admin rights and no access to the owner's
+files, and a sandbox narrows what the process can touch: a Seatbelt profile on macOS
+(light_profile.py), bubblewrap on Linux (a mount namespace in which the owner's home does not
+exist). It shares the host kernel, so it is a policy and not a boundary like a VM
+(docs/threat-model.md).
 """
 
 from __future__ import annotations
@@ -27,8 +28,18 @@ from .light_profile import NETWORKS, render
 ACCOUNT = "octopus"
 GROUP = "octopus-ci"
 WORK_ROOT = "/Users/Shared/octopus-work"
+LINUX_WORK_ROOT = "/var/lib/octopus-work"
+LINUX_HOME = "/var/lib/octopus"
 SANDBOX_EXEC = "/usr/bin/sandbox-exec"
+BWRAP = "bwrap"
+SEATBELT = "seatbelt"
+BUBBLEWRAP = "bwrap"
+BACKENDS = (SEATBELT, BUBBLEWRAP)
 JOB_PATH = "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+LINUX_JOB_PATH = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+# Where a distribution keeps the system, as read-only mounts of the sandbox (bubblewrap).
+SYSTEM_DIRS = ("/usr", "/etc", "/opt")
+SYSTEM_LINKS = ("/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32")
 
 _ACCOUNT = re.compile(r"[a-z_][a-z0-9_-]{0,30}")
 _RESERVED = frozenset({"root", "admin", "daemon", "nobody", "wheel", "staff", "_www"})
@@ -59,6 +70,36 @@ def pure_path(text: str) -> PurePath:
     return PurePosixPath(text)
 
 
+def default_backend() -> str:
+    return BUBBLEWRAP if sys.platform.startswith("linux") else SEATBELT
+
+
+def host_defaults() -> Light:
+    """The light level for this host: its sandbox and the usual work root."""
+    if sys.platform.startswith("linux"):
+        return Light(backend=BUBBLEWRAP, work_root=LINUX_WORK_ROOT)
+    return Light()
+
+
+def system_mounts(
+    exists: Callable[[str], bool] = os.path.exists,
+    islink: Callable[[str], bool] = os.path.islink,
+    readlink: Callable[[str], str] = os.readlink,
+) -> list[str]:
+    """The read-only view of the system a bubblewrap job gets: no /home, /root, /var or /mnt."""
+    args: list[str] = []
+    for path in SYSTEM_DIRS:
+        args += ["--ro-bind-try", path, path]
+    for path in SYSTEM_LINKS:
+        if islink(path):
+            args += ["--symlink", readlink(path), path]
+        elif exists(path):
+            args += ["--ro-bind", path, path]
+    # /etc/resolv.conf is often a link into here
+    args += ["--ro-bind-try", "/run/systemd/resolve", "/run/systemd/resolve"]
+    return args
+
+
 def valid_account(name: str) -> bool:
     return bool(_ACCOUNT.fullmatch(name)) and name not in _RESERVED
 
@@ -73,6 +114,7 @@ class Light:
     max_processes: int = 2048
     max_files: int = 8192
     max_cpu_s: int = 6 * 3600
+    backend: str = SEATBELT
 
     level: ClassVar[str] = "light"
 
@@ -87,6 +129,8 @@ class Light:
             or not root.name.startswith("octopus")
         ):
             raise LightError(f"invalid work root: {self.work_root}")
+        if self.backend not in BACKENDS:
+            raise LightError(f"invalid backend: {self.backend}: use one of: {', '.join(BACKENDS)}")
         if self.network not in NETWORKS:
             raise LightError(f"invalid network: {self.network}: use one of: {', '.join(NETWORKS)}")
         for name in ("max_processes", "max_files", "max_cpu_s"):
@@ -95,10 +139,9 @@ class Light:
 
     def supported(self, run: Run = _run) -> str | None:
         """Why this host cannot run jobs this way, or None."""
-        if sys.platform != "darwin":
-            return "the light level exists for macOS hosts only"
-        if not os.path.exists(SANDBOX_EXEC):
-            return f"{SANDBOX_EXEC} is missing"
+        why = self._sandbox_missing(run)
+        if why is not None:
+            return why
         if not Path(self.work_root).is_dir():
             return f"no work root {self.work_root}: run: octopus ci light install"
         try:
@@ -112,8 +155,35 @@ class Light:
             )
         return None
 
+    def sandbox_problem(self, run: Run = _run) -> str | None:
+        """Why this host's sandbox tool cannot be used (before any account exists), or None."""
+        return self._sandbox_missing(run)
+
+    def _sandbox_missing(self, run: Run) -> str | None:
+        if self.backend == SEATBELT:
+            if sys.platform != "darwin":
+                return "the Seatbelt sandbox exists for macOS hosts only"
+            if not os.path.exists(SANDBOX_EXEC):
+                return f"{SANDBOX_EXEC} is missing"
+            return None
+        if not sys.platform.startswith("linux"):
+            return "the bubblewrap sandbox exists for Linux hosts only"
+        if shutil.which(BWRAP) is None:
+            return "bubblewrap (bwrap) is not installed: install it with your package manager"
+        try:
+            probe = run([BWRAP, "--unshare-user", "--ro-bind", "/", "/", "/bin/true"])
+        except (OSError, subprocess.SubprocessError) as e:
+            return f"could not run bubblewrap: {e}"
+        if probe.returncode != 0:
+            detail = (probe.stderr or "").strip().splitlines()[-1:] or ["exit code " + str(probe.returncode)]
+            return (
+                f"bubblewrap cannot create a user namespace here: {detail[0]} "
+                "(Ubuntu 23.10 and later restrict them: see docs/decentralized-ci.md)"
+            )
+        return None
+
     def describe(self) -> str:
-        return f"light (account {self.account}, network {self.network})"
+        return f"light (account {self.account}, {self.backend}, network {self.network})"
 
     def prepare(self, work: Path, tag: str) -> str:
         """Copy the checkout, without `.git`, where the account can use it."""
@@ -155,15 +225,15 @@ class Light:
         job_env = {
             "HOME": f"{work}/.home",
             "TMPDIR": f"{work}/.tmp",
-            "PATH": JOB_PATH,
-            "LANG": "en_US.UTF-8",
+            "PATH": JOB_PATH if self.backend == SEATBELT else LINUX_JOB_PATH,
+            "LANG": "en_US.UTF-8" if self.backend == SEATBELT else "C.UTF-8",
             **env,
         }
         limits = (
             f"ulimit -n {self.max_files} 2>/dev/null; ulimit -u {self.max_processes} 2>/dev/null; "
             f'ulimit -t {self.max_cpu_s} 2>/dev/null; exec /bin/bash "$1"'
         )
-        return [
+        as_account = [
             "sudo",
             "-n",
             "-u",
@@ -172,17 +242,38 @@ class Light:
             "/usr/bin/env",
             "-i",
             *[f"{k}={v}" for k, v in sorted(job_env.items())],
-            SANDBOX_EXEC,
-            "-D",
-            f"WORK={work}",
-            "-p",
-            render(self.network),
-            "/bin/bash",
-            "-c",
-            limits,
-            "octopus-job",
-            f"{work}/{script}",
         ]
+        job = ["/bin/bash", "-c", limits, "octopus-job", f"{work}/{script}"]
+        if self.backend == SEATBELT:
+            return [
+                *as_account,
+                SANDBOX_EXEC,
+                "-D",
+                f"WORK={work}",
+                "-p",
+                render(self.network),
+                *job,
+            ]
+        return [*as_account, *self._bwrap(work), *job]
+
+    def _bwrap(self, work: str) -> list[str]:
+        """The sandbox: a mount namespace with the system read-only and only the job writable."""
+        args = [
+            BWRAP,
+            "--die-with-parent",
+            "--new-session",
+            "--unshare-pid",
+            "--unshare-ipc",
+            "--unshare-uts",
+            "--cap-drop",
+            "ALL",
+        ]
+        if self.network == "none":
+            args.append("--unshare-net")
+        args += system_mounts()
+        args += ["--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp"]
+        args += ["--bind", work, work, "--chdir", work]
+        return args
 
     def dumps(self) -> str:
         return json.dumps(asdict(self))

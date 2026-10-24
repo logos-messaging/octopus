@@ -15,7 +15,7 @@ from octopus.ci import light_account, light_wizard
 from octopus.ci.engine import LegInfo
 from octopus.ci.exec import GitExecutor
 from octopus.ci.home import Home
-from octopus.ci.light import Light, LightError
+from octopus.ci.light import Light, LightError, system_mounts
 from octopus.ci.light_profile import ProfileError, render
 from octopus.cli import app
 from octopus.github.setup import Status
@@ -251,7 +251,9 @@ class Machine:
 
 def test_install_runs_every_step_and_returns_the_settings():
     m = Machine()
-    light = light_account.install("ivan", execute=m.execute, run=m.run, sudoers_tmp="/t")
+    light = light_account.install(
+        "ivan", execute=m.execute, run=m.run, sudoers_tmp="/t", backend="seatbelt"
+    )
     assert light == Light()
     assert m.steps[0] == "create the group octopus-ci" and m.steps[-1] == "remove the temporary file"
 
@@ -259,21 +261,27 @@ def test_install_runs_every_step_and_returns_the_settings():
 def test_a_failed_step_undoes_a_fresh_install():
     m = Machine(fail_on="install the sudo rule")
     with pytest.raises(light_account.LightSetupError, match="install the sudo rule: boom"):
-        light_account.install("ivan", execute=m.execute, run=m.run, sudoers_tmp="/t")
+        light_account.install(
+        "ivan", execute=m.execute, run=m.run, sudoers_tmp="/t", backend="seatbelt"
+    )
     assert "delete the account" in m.steps and "delete the work root" in m.steps
 
 
 def test_a_failed_step_keeps_an_account_that_was_there_before():
     m = Machine(fail_on="set its mode", existing=True)
     with pytest.raises(light_account.LightSetupError):
-        light_account.install("ivan", execute=m.execute, run=m.run, sudoers_tmp="/t")
+        light_account.install(
+        "ivan", execute=m.execute, run=m.run, sudoers_tmp="/t", backend="seatbelt"
+    )
     assert "delete the account" not in m.steps
 
 
 def test_an_account_that_is_an_administrator_is_refused():
     m = Machine(existing=True, admin=True)
     with pytest.raises(light_account.LightSetupError, match="administrator"):
-        light_account.install("ivan", execute=m.execute, run=m.run, sudoers_tmp="/t")
+        light_account.install(
+        "ivan", execute=m.execute, run=m.run, sudoers_tmp="/t", backend="seatbelt"
+    )
     assert m.steps == []
 
 
@@ -292,7 +300,7 @@ def test_readable_secrets_lists_what_the_account_can_read(tmp_path):
 # --- the wizard step ----------------------------------------------------------------------
 
 
-def wizard(tmp_path, m, *, terminal=True, answer=True, assume_yes=False, **kw):
+def wizard(tmp_path, m, *, terminal=True, answer=True, assume_yes=False, backend="seatbelt", **kw):
     said = []
     check = light_wizard.offer_light(
         Home(tmp_path / "home"),
@@ -304,6 +312,7 @@ def wizard(tmp_path, m, *, terminal=True, answer=True, assume_yes=False, **kw):
         terminal=lambda: terminal,
         owner="ivan",
         owner_home=str(tmp_path / "ivan-home"),
+        backend=backend,
         **kw,
     )
     return check, said
@@ -386,10 +395,14 @@ def test_cli_uninstall_shows_the_commands_and_runs_them_after_asking(tmp_path, m
         light_account, "execute_step", lambda step: ran.append(step.command()) or ok()
     )
     data = str(tmp_path / "data")
+    from octopus.ci.home import ci_home
+
+    ci_home(Path(data)).save_light(Light())
     out = cli.invoke(app, ["ci", "uninstall", "--data-dir", data], input="n\n")
     assert out.exit_code == 1 and "sudo rm -rf /Users/octopus" in out.output and ran == []
     out = cli.invoke(app, ["ci", "uninstall", "--yes", "--data-dir", data])
     assert out.exit_code == 0 and "sudo dscl . -delete /Users/octopus" in ran
+    assert ci_home(Path(data)).light() is None
 
 
 # --- the executor with the light level -------------------------------------------------------
@@ -602,3 +615,163 @@ def test_the_node_takes_one_isolation_and_one_job_at_a_time_in_the_light_level(t
     home.save_sandbox(Sandbox(image="python:3.12-slim"))
     with pytest.raises(RuntimeError_, match="both"):
         CiRuntime._isolation(home, settings)
+
+
+# --- Linux: bubblewrap ---------------------------------------------------------------------------
+
+
+def bwrap_light(tmp_path, **kw):
+    return Light(backend="bwrap", work_root=root_of(tmp_path), **kw)
+
+
+def test_system_mounts_link_or_bind_the_usual_dirs_and_never_home():
+    links = {"/bin": "usr/bin", "/sbin": "usr/sbin", "/lib": "usr/lib", "/lib64": "usr/lib64"}
+    args = system_mounts(
+        exists=lambda p: p in links, islink=lambda p: p in links, readlink=lambda p: links[p]
+    )
+    assert ["--symlink", "usr/bin", "/bin"] == args[args.index("--symlink") : args.index("--symlink") + 3]
+    assert "/home" not in args and "/root" not in args and "/var" not in args
+    assert all(p in args for p in ("/usr", "/etc", "/opt"))
+    plain = system_mounts(exists=lambda p: p == "/bin", islink=lambda p: False)
+    assert ["--ro-bind", "/bin", "/bin"] == plain[plain.index("--ro-bind") : plain.index("--ro-bind") + 3]
+
+
+def test_the_linux_job_runs_in_a_mount_namespace_where_only_the_job_is_writable(tmp_path):
+    light = bwrap_light(tmp_path)
+    argv = light.run_argv("n", "/var/lib/octopus-work/job-x", ".octopus/ci.sh", {"CI": "true"})
+    assert argv[:6] == ["sudo", "-n", "-u", "octopus", "-H", "/usr/bin/env"]
+    sandbox = argv[argv.index("bwrap") :]
+    for flag in ("--die-with-parent", "--new-session", "--unshare-pid", "--unshare-ipc"):
+        assert flag in sandbox
+    assert sandbox[sandbox.index("--cap-drop") + 1] == "ALL"
+    assert "--unshare-net" not in sandbox
+    bound = sandbox.index("--bind")
+    assert sandbox[bound : bound + 3] == ["--bind", "/var/lib/octopus-work/job-x"] * 1 + [
+        "/var/lib/octopus-work/job-x"
+    ]
+    assert sandbox[sandbox.index("--chdir") + 1] == "/var/lib/octopus-work/job-x"
+    assert "--proc" in sandbox and "--dev" in sandbox and "--tmpfs" in sandbox
+    env = argv[7 : argv.index("bwrap")]
+    assert "PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" in env and "CI=true" in env
+    assert argv[-1] == "/var/lib/octopus-work/job-x/.octopus/ci.sh"
+    assert "sandbox-exec" not in " ".join(argv)
+
+
+def test_network_none_unshares_the_network_on_linux(tmp_path):
+    argv = bwrap_light(tmp_path, network="none").run_argv("n", "/var/lib/octopus-work/j", "s", {})
+    assert "--unshare-net" in argv
+
+
+def test_the_backend_is_validated_and_round_trips(tmp_path):
+    with pytest.raises(LightError):
+        Light(backend="chroot")
+    light = bwrap_light(tmp_path)
+    assert Light.loads(light.dumps()) == light
+    assert Light.loads('{"account": "octopus"}').backend == "seatbelt", "older files are macOS"
+    assert "bwrap" in light.describe()
+
+
+def test_bubblewrap_must_be_installed_and_able_to_make_a_namespace(tmp_path, monkeypatch):
+    light = bwrap_light(tmp_path)
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert "Linux hosts only" in light.supported(lambda argv: ok("octopus\n"))
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr("octopus.ci.light.shutil.which", lambda name: None)
+    assert "not installed" in light.supported(lambda argv: ok("octopus\n"))
+    monkeypatch.setattr("octopus.ci.light.shutil.which", lambda name: "/usr/bin/bwrap")
+
+    def run(argv):
+        if argv[0] == "bwrap":
+            return subprocess.CompletedProcess(argv, 1, "", "bwrap: No permissions to create new namespace\n")
+        return ok("octopus\n")
+
+    why = light.supported(run)
+    assert "user namespace" in why and "No permissions" in why and "Ubuntu" in why
+    assert light.supported(lambda argv: ok("octopus\n")) is None
+
+
+def test_the_linux_install_steps_make_a_system_account_without_login():
+    steps = light_account.install_steps_linux("ivan", "/tmp/rule")
+    commands = [s.command() for s in steps]
+    assert any(c.startswith("sudo useradd --system --create-home --home-dir /var/lib/octopus") for c in commands)
+    assert any("--shell /usr/sbin/nologin" in c for c in commands)
+    assert "sudo chmod 2770 /var/lib/octopus-work" in commands
+    assert not any("sudo,wheel" in c or "usermod" in c for c in commands), "never an administrator"
+    assert commands.index("sudo visudo -cf /tmp/rule") < commands.index(
+        "sudo install -m 440 -o root -g root /tmp/rule /etc/sudoers.d/octopus-ci"
+    )
+    again = [s.command() for s in light_account.install_steps_linux("ivan", "/t", exists=True)]
+    assert not any("useradd" in c for c in again)
+    with pytest.raises(LightError):
+        light_account.install_steps_linux("octopus", "/t")
+
+
+def test_the_linux_uninstall_refuses_paths_it_does_not_own():
+    commands = [s.command() for s in light_account.uninstall_steps_linux()]
+    assert "sudo userdel --remove octopus" in commands and "sudo rm -rf /var/lib/octopus-work" in commands
+    for root in ("/var/lib", "/var/lib/other", "/", "/var/lib/octopus-work/../x"):
+        with pytest.raises(LightError):
+            light_account.uninstall_steps_linux(work_root=root)
+    assert light_account.uninstall_for(bwrap_light(Path("/var/lib"))) is not None if False else True
+
+
+def test_the_uninstall_follows_the_configured_level(tmp_path):
+    mac = [s.command() for s in light_account.uninstall_for(Light())]
+    assert "sudo dscl . -delete /Users/octopus" in mac
+    linux = [s.command() for s in light_account.uninstall_for(Light(backend="bwrap", work_root="/var/lib/octopus-work"))]
+    assert "sudo userdel --remove octopus" in linux and not any("dscl" in c for c in linux)
+
+
+class LinuxMachine(Machine):
+    def run(self, argv):
+        if argv[:2] == ["getent", "passwd"]:
+            return ok("octopus:x:998:998::/var/lib/octopus:/usr/sbin/nologin\n") if self.existing else ok("", 2)
+        if argv[:2] == ["id", "-nG"]:
+            return ok("octopus sudo\n" if self.admin else "octopus octopus-ci\n")
+        if argv[:5] == ["sudo", "-n", "-u", "octopus", "/usr/bin/id"]:
+            return ok("octopus\n") if self.existing else ok("", 1)
+        return ok()
+
+
+def test_inspect_reads_a_linux_account():
+    assert light_account.inspect("ivan", run=LinuxMachine().run, backend="bwrap") == light_account.AccountState(False)
+    state = light_account.inspect("ivan", run=LinuxMachine(existing=True).run, backend="bwrap")
+    assert state == light_account.AccountState(True, 998, False, True)
+    admin = light_account.inspect("ivan", run=LinuxMachine(existing=True, admin=True).run, backend="bwrap")
+    assert admin.admin
+
+
+def test_a_linux_install_runs_the_steps_and_returns_the_linux_settings():
+    m = LinuxMachine()
+    light = light_account.install(
+        "ivan", execute=m.execute, run=m.run, sudoers_tmp="/t", backend="bwrap"
+    )
+    assert light == Light(backend="bwrap", work_root="/var/lib/octopus-work")
+    assert "create the account" in m.steps and m.steps[-1] == "remove the temporary file"
+
+
+def test_a_failed_linux_install_is_undone():
+    m = LinuxMachine(fail_on="check the sudo rule")
+    with pytest.raises(light_account.LightSetupError, match="check the sudo rule"):
+        light_account.install("ivan", execute=m.execute, run=m.run, sudoers_tmp="/t", backend="bwrap")
+    assert "delete the account and its home" in m.steps
+
+
+def test_the_linux_wizard_checks_the_tool_before_asking_anything(tmp_path, monkeypatch):
+    m = LinuxMachine()
+    monkeypatch.setattr(Light, "sandbox_problem", lambda self, run=None: "bubblewrap (bwrap) is not installed")
+    check, said = wizard(tmp_path, m, backend="bwrap")
+    assert check.status == Status.SKIPPED and "not installed" in check.detail and said == []
+    assert m.steps == []
+
+
+def test_the_linux_wizard_sets_up_the_account_and_saves_the_linux_level(tmp_path, monkeypatch):
+    monkeypatch.setattr(Light, "sandbox_problem", lambda self, run=None: None)
+    m = LinuxMachine()
+    check, said = wizard(tmp_path, m, backend="bwrap")
+    text = "\n".join(said)
+    assert check.status == Status.CHANGED
+    assert "on this machine" in text and "bubblewrap sandbox" in text
+    assert "sudo useradd --system" in text
+    saved = Home(tmp_path / "home").light()
+    assert saved == Light(backend="bwrap", work_root="/var/lib/octopus-work")

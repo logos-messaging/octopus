@@ -621,7 +621,7 @@ def sandbox_status(data_dir: Path | None = DataDirOpt) -> None:
 
 
 light_app = typer.Typer(
-    no_args_is_help=True, help="Run jobs as a dedicated 'octopus' account on this Mac."
+    no_args_is_help=True, help="Run jobs as a dedicated 'octopus' account, in a sandbox."
 )
 ci_app.add_typer(light_app, name="light")
 
@@ -644,7 +644,9 @@ def light_install(
     check = light_wizard.offer_light(home, assume_yes=yes)
     _show(check)
     if check.status == Status.CHANGED and network != "internet":
-        home.save_light(Light(network=network))
+        import dataclasses
+
+        home.save_light(dataclasses.replace(home.light() or Light(), network=network))
     if check.failed or check.status == Status.SKIPPED:
         raise typer.Exit(code=3)
     typer.echo("restart the node for it to take effect: octopus runner install-service")
@@ -686,16 +688,12 @@ def ci_uninstall(
 ) -> None:
     """Remove the 'octopus' account, its home, the sudo rule and the work root."""
     from .ci import light_account
-    from .ci.light import ACCOUNT, WORK_ROOT, LightError
+    from .ci.light import LightError
 
     home = _home(data_dir)
     try:
         light = home.light()
-        steps = light_account.uninstall_steps(
-            f"/Users/{light.account if light else ACCOUNT}",
-            account=light.account if light else ACCOUNT,
-            work_root=light.work_root if light else WORK_ROOT,
-        )
+        steps = light_account.uninstall_for(light)
     except LightError as e:
         raise _fail(str(e), 3) from e
     typer.echo("These commands will run (admin password needed):")

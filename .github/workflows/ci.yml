@@ -86,16 +86,23 @@ jobs:
           retention-days: 3
           if-no-files-found: error
 
-  # Creates the real 'octopus' account on a hosted Mac (it has passwordless sudo), runs jobs as
-  # it and checks what they can and cannot reach. Destructive, so only ever run on CI.
+  # Creates the real 'octopus' account on a hosted machine (they have passwordless sudo), runs jobs
+  # as it and checks what they can and cannot reach. Destructive, so only ever run on CI.
   light:
-    name: light isolation (macos)
-    runs-on: macos-15
+    name: light isolation (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, ubuntu-22.04]
     env:
       OCTOPUS_TEST_LIGHT_ACCOUNT: "1"
     steps:
       - uses: actions/checkout@v4
+      - name: Install bubblewrap
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"

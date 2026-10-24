@@ -1,4 +1,4 @@
-"""Creating, checking and removing the dedicated `octopus` account (macOS).
+"""Creating, checking and removing the dedicated `octopus` account (macOS and Linux).
 
 Everything here is a list of explicit steps so the wizard can show the exact commands before
 anything runs, and so tests can run them against a fake. The steps need the machine's admin
@@ -13,11 +13,24 @@ import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from .light import ACCOUNT, GROUP, WORK_ROOT, Light, LightError, pure_path, valid_account
+from .light import (
+    ACCOUNT,
+    BUBBLEWRAP,
+    GROUP,
+    LINUX_HOME,
+    LINUX_WORK_ROOT,
+    WORK_ROOT,
+    Light,
+    LightError,
+    default_backend,
+    pure_path,
+    valid_account,
+)
 
 SUDOERS_FILE = "/etc/sudoers.d/octopus-ci"
 UID_RANGE = (300, 399)  # below 500: hidden from the login window
 STAFF_GID = "20"
+ADMIN_GROUPS = ("sudo", "wheel", "admin")
 
 # What the account must not be able to read, relative to the owner's home.
 SECRET_PATHS = (
@@ -89,7 +102,11 @@ def sudoers_line(owner: str, account: str) -> str:
     return f"{owner} ALL=({account}) NOPASSWD: ALL\n"
 
 
-def inspect(owner: str, account: str = ACCOUNT, run: Run = _run) -> AccountState:
+def inspect(
+    owner: str, account: str = ACCOUNT, run: Run = _run, backend: str | None = None
+) -> AccountState:
+    if (backend or default_backend()) == BUBBLEWRAP:
+        return _inspect_linux(account, run)
     try:
         read = run(["dscl", ".", "-read", f"/Users/{account}", "UniqueID"])
     except (OSError, subprocess.SubprocessError):
@@ -102,6 +119,21 @@ def inspect(owner: str, account: str = ACCOUNT, run: Run = _run) -> AccountState
         uid = int(match.group(1))
     member = run(["dseditgroup", "-o", "checkmember", "-m", account, "admin"])
     admin = member.stdout.strip().lower().startswith("yes")
+    who = run(["sudo", "-n", "-u", account, "/usr/bin/id", "-un"])
+    return AccountState(True, uid, admin, who.returncode == 0 and who.stdout.strip() == account)
+
+
+def _inspect_linux(account: str, run: Run) -> AccountState:
+    try:
+        entry = run(["getent", "passwd", account])
+    except (OSError, subprocess.SubprocessError):
+        return AccountState(False)
+    if entry.returncode != 0:
+        return AccountState(False)
+    fields = entry.stdout.strip().split(":")
+    uid = int(fields[2]) if len(fields) > 2 and fields[2].isdigit() else None
+    groups = run(["id", "-nG", account]).stdout.split()
+    admin = any(g in ADMIN_GROUPS for g in groups)
     who = run(["sudo", "-n", "-u", account, "/usr/bin/id", "-un"])
     return AccountState(True, uid, admin, who.returncode == 0 and who.stdout.strip() == account)
 
@@ -161,6 +193,101 @@ def install_steps(
         Step("remove the temporary file", ("rm", "-f", sudoers_tmp), sudo=False),
     ]
     return steps
+
+
+def install_steps_linux(
+    owner: str,
+    sudoers_tmp: str,
+    *,
+    account: str = ACCOUNT,
+    group: str = GROUP,
+    work_root: str = LINUX_WORK_ROOT,
+    exists: bool = False,
+) -> list[Step]:
+    """Linux: a system account without login, its group, the work root and the sudo rule."""
+    if not valid_account(account):
+        raise LightError(f"invalid account name: {account}")
+    if account == owner:
+        raise LightError("the dedicated account cannot be the machine owner")
+    home = f"/var/lib/{account}" if account != ACCOUNT else LINUX_HOME
+    steps: list[Step] = [
+        Step(f"create the group {group}", ("groupadd", "--system", "--force", group)),
+    ]
+    if not exists:
+        steps += [
+            Step(
+                "create the account",
+                (
+                    "useradd",
+                    "--system",
+                    "--create-home",
+                    "--home-dir",
+                    home,
+                    "--gid",
+                    group,
+                    "--shell",
+                    "/usr/sbin/nologin",
+                    "--comment",
+                    "Octopus CI",
+                    account,
+                ),
+            ),
+            Step("keep its home private", ("chmod", "700", home)),
+        ]
+    steps += [
+        Step("create the work root", ("mkdir", "-p", work_root)),
+        Step("share it with the account", ("chown", f"{owner}:{group}", work_root)),
+        Step("set its mode", ("chmod", "2770", work_root)),
+        Step(
+            "write the sudo rule (a temporary file)",
+            ("tee", sudoers_tmp),
+            sudo=False,
+            stdin=sudoers_line(owner, account),
+        ),
+        Step("check the sudo rule", ("visudo", "-cf", sudoers_tmp)),
+        Step(
+            "install the sudo rule",
+            ("install", "-m", "440", "-o", "root", "-g", "root", sudoers_tmp, SUDOERS_FILE),
+        ),
+        Step("remove the temporary file", ("rm", "-f", sudoers_tmp), sudo=False),
+    ]
+    return steps
+
+
+def uninstall_steps_linux(
+    *,
+    account: str = ACCOUNT,
+    group: str = GROUP,
+    work_root: str = LINUX_WORK_ROOT,
+) -> list[Step]:
+    """Linux: remove what `install_steps_linux` made."""
+    if not valid_account(account):
+        raise LightError(f"invalid account name: {account}")
+    root = pure_path(work_root)
+    if len(root.parts) < 4 or ".." in root.parts or not root.name.startswith("octopus"):
+        raise LightError(f"refusing to delete this work root: {work_root}")
+    return [
+        Step("remove the sudo rule", ("rm", "-f", SUDOERS_FILE)),
+        Step("stop its processes", ("pkill", "-9", "-u", account)),
+        Step("delete the account and its home", ("userdel", "--remove", account)),
+        Step("delete the group", ("groupdel", group)),
+        Step("delete the work root", ("rm", "-rf", work_root)),
+    ]
+
+
+def uninstall_for(light: Light | None) -> list[Step]:
+    """The removal steps for the configured level, or for this host's default when none is."""
+    light = light or Light(
+        backend=default_backend(),
+        work_root=LINUX_WORK_ROOT if default_backend() == BUBBLEWRAP else WORK_ROOT,
+    )
+    if light.backend == BUBBLEWRAP:
+        return uninstall_steps_linux(
+            account=light.account, work_root=light.work_root
+        )
+    return uninstall_steps(
+        f"/Users/{light.account}", account=light.account, work_root=light.work_root
+    )
 
 
 def uninstall_steps(
@@ -226,31 +353,37 @@ def install(
     say: Callable[[str], object] = lambda _text: None,
     sudoers_tmp: str,
     account: str = ACCOUNT,
-    work_root: str = WORK_ROOT,
+    work_root: str | None = None,
+    backend: str | None = None,
 ) -> Light:
     """Create the account and its surroundings; undo what was made if a step fails."""
-    state = inspect(owner, account, run)
+    backend = backend or default_backend()
+    linux = backend == BUBBLEWRAP
+    work_root = work_root or (LINUX_WORK_ROOT if linux else WORK_ROOT)
+    state = inspect(owner, account, run, backend)
     if state.admin:
         raise LightSetupError(f"{account} is an administrator: remove it from the admin group")
-    if state.exists and state.uid is not None:
-        uid = state.uid
+    if linux:
+        steps = install_steps_linux(
+            owner, sudoers_tmp, account=account, work_root=work_root, exists=state.exists
+        )
+        undo = uninstall_steps_linux(account=account, work_root=work_root)
     else:
-        listing = run(["dscl", ".", "-list", "/Users", "UniqueID"]).stdout
-        uid = pick_uid(listing)
-    steps = install_steps(
-        owner, uid, sudoers_tmp, account=account, work_root=work_root, exists=state.exists
-    )
+        if state.exists and state.uid is not None:
+            uid = state.uid
+        else:
+            uid = pick_uid(run(["dscl", ".", "-list", "/Users", "UniqueID"]).stdout)
+        steps = install_steps(
+            owner, uid, sudoers_tmp, account=account, work_root=work_root, exists=state.exists
+        )
+        undo = uninstall_steps(f"/Users/{account}", account=account, work_root=work_root)
     try:
         run_steps(steps, execute, say)
     except LightSetupError:
         if not state.exists:
-            run_steps(
-                uninstall_steps(f"/Users/{account}", account=account, work_root=work_root),
-                execute,
-                tolerate_failure=True,
-            )
+            run_steps(undo, execute, tolerate_failure=True)
         raise
-    return Light(account=account, work_root=work_root)
+    return Light(account=account, work_root=work_root, backend=backend)
 
 
 def readable_secrets(
