@@ -15,6 +15,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from .engine import ExecResult, LegInfo
+from .isolation import HOST_DESCRIPTION, Isolation
 from .sandbox import Sandbox
 
 log = logging.getLogger(__name__)
@@ -39,9 +40,10 @@ class GitExecutor:
     """Checks out the commit in a fresh directory and runs `.octopus/ci.sh` there.
 
     The checkout uses the machine owner's git credentials (`gh auth setup-git`), so it works for
-    any repo the owner can read. The directory is deleted afterwards. Without a `sandbox` this is
-    not one: the job runs as the owner (see docs/decentralized-ci.md). With one, the script runs in
-    a throwaway container that sees only the checkout, and the owner's credentials stay outside.
+    any repo the owner can read. The directory is deleted afterwards. Without isolation the job
+    runs as the owner (see docs/decentralized-ci.md). With a container (`sandbox`) the script sees
+    only the checkout; with the light level it runs as the dedicated account under a profile. In
+    both the owner's credentials stay outside.
     """
 
     def __init__(
@@ -52,10 +54,11 @@ class GitExecutor:
         timeout_s: float = 6 * 3600.0,
         poll_s: float = 0.5,
         sandbox: Sandbox | None = None,
+        isolation: Isolation | None = None,
     ) -> None:
         self._root = work_root
         self._url = url
-        self._sandbox = sandbox
+        self._isolation = isolation if isolation is not None else sandbox
         self._timeout_s = timeout_s
         self._poll_s = poll_s
 
@@ -72,40 +75,48 @@ class GitExecutor:
             script = work / SCRIPT
             if not script.is_file():
                 return ExecResult(127, f"no {SCRIPT} in the repo")
-            if self._sandbox is not None:
-                return self._run_sandboxed(leg, tag, work, on_line, should_stop)
+            if self._isolation is not None:
+                return self._run_isolated(leg, tag, work, on_line, should_stop)
+            on_line(f"octopus: isolation: {HOST_DESCRIPTION}")
             return self._stream(
                 ["bash", str(script)], work, self._job_env(leg), on_line, should_stop
             )
         finally:
             shutil.rmtree(work, ignore_errors=True)
 
-    def _run_sandboxed(self, leg, tag, work, on_line, should_stop) -> ExecResult:
-        assert self._sandbox is not None
-        why = Sandbox.supported()
+    def _run_isolated(self, leg, tag, work, on_line, should_stop) -> ExecResult:
+        isolation = self._isolation
+        assert isolation is not None
+        why = isolation.supported()
         if why is not None:
             return ExecResult(126, f"could not sandbox the job: {why}")
+        try:
+            job_dir = isolation.prepare(work, tag)
+        except (OSError, ValueError) as e:
+            return ExecResult(126, f"could not sandbox the job: could not prepare it: {e}")
+        on_line(f"octopus: isolation: {isolation.describe()}")
         name = f"octopus-{tag}"
-        argv = self._sandbox.run_argv(name, str(work), SCRIPT, self._leg_vars(leg))
+        argv = isolation.run_argv(name, job_dir, SCRIPT, self._leg_vars(leg))
         host_env = {k: v for k, v in os.environ.items() if k not in _SECRET_ENV}
         try:
-            return self._stream(argv, work, host_env, on_line, should_stop)
+            return self._stream(argv, Path(job_dir), host_env, on_line, should_stop)
         finally:
-            self._remove_container(name)
+            self._reap(name)
+            isolation.cleanup(job_dir)
 
-    def _remove_container(self, name: str) -> None:
+    def _reap(self, name: str) -> None:
         """Make sure nothing outlives the leg, whatever happened to the client process."""
-        assert self._sandbox is not None
+        assert self._isolation is not None
         try:
             subprocess.run(
-                self._sandbox.kill_argv(name),
+                self._isolation.kill_argv(name),
                 capture_output=True,
                 timeout=30,
                 check=False,
                 stdin=subprocess.DEVNULL,
             )
         except (OSError, subprocess.SubprocessError):
-            log.warning("could not remove the container: %s", name)
+            log.warning("could not remove what the job left: %s", name)
 
     def _checkout(self, leg, work, on_line, should_stop) -> ExecResult | None:
         url = self._url.format(repo=leg.repo)

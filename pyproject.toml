@@ -43,8 +43,9 @@ testpaths = ["tests"]
 markers = [
   "needs_lib: requires a built liblogosdelivery (see README)",
   "e2e: runs against a real GitHub repo and needs liblogosdelivery (see docs/e2e.md)",
+  "needs_light_account: creates the real 'octopus' account on a Mac (set OCTOPUS_TEST_LIGHT_ACCOUNT=1)",
 ]
-addopts = "-m 'not needs_lib and not e2e'"
+addopts = "-m 'not needs_lib and not e2e and not needs_light_account'"
 
 [tool.ruff]
 line-length = 100

@@ -12,6 +12,8 @@ import os
 import re
 import sys
 from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import ClassVar
 
 RUNTIMES = ("docker", "podman")
 HOME_IN_JOB = "/tmp"
@@ -39,6 +41,8 @@ class Sandbox:
     memory: str = "4g"
     cpus: str = "2"
     pids: int = 1024
+
+    level: ClassVar[str] = "container"
 
     def __post_init__(self) -> None:
         if self.runtime not in RUNTIMES:
@@ -134,6 +138,15 @@ class Sandbox:
             argv += ["-e", f"{key}={value}"]
         argv += [self.image, "bash", f"{WORK_IN_JOB}/{script}"]
         return argv
+
+    def describe(self) -> str:
+        return f"container {self.image} ({self.runtime}, network {self.network})"
+
+    def prepare(self, work: Path, tag: str) -> str:
+        return str(work)
+
+    def cleanup(self, job_dir: str) -> None:
+        return None
 
     def kill_argv(self, name: str) -> list[str]:
         return [self.runtime, "rm", "-f", name]
