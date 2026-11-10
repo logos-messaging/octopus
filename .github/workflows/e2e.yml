@@ -23,8 +23,8 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 90
     env:
-      E2E_DATA: ${{ github.workspace }}/../octopus-e2e-data
-      E2E_LOGS: ${{ github.workspace }}/../octopus-e2e-logs
+      E2E_DATA: ${{ github.workspace }}-e2e-data
+      E2E_LOGS: ${{ github.workspace }}-e2e-logs
     steps:
       - uses: actions/checkout@v4
         with:
