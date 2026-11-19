@@ -3,15 +3,28 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/logos-messaging/octopus/main/scripts/install.sh | sh
 #
-# OCTOPUS_REF picks the branch, tag or commit to install (default: main).
+# OCTOPUS_REF picks the branch, tag or commit to install (default: the latest release).
 set -eu
 
 REPO="https://github.com/logos-messaging/octopus"
-REF="${OCTOPUS_REF:-main}"
-# An archive, not git+: pip would clone every submodule, recursively, twice under pipx.
-SPEC="octopus[logos] @ ${REPO}/archive/${REF}.tar.gz"
 
 die() { echo "error: $*" >&2; exit 1; }
+
+if [ -n "${OCTOPUS_REF:-}" ]; then
+  REF="$OCTOPUS_REF"
+else
+  # The latest release, the one `octopus update` installs: GitHub redirects to its tag page.
+  latest=$(curl -fsSL -o /dev/null -w '%{url_effective}' "${REPO}/releases/latest") ||
+    die "could not find the latest release: set OCTOPUS_REF to a tag or a branch"
+  REF="${latest##*/}"
+  case "$REF" in
+    v[0-9]*) ;;
+    *) die "could not find the latest release: set OCTOPUS_REF to a tag or a branch" ;;
+  esac
+fi
+echo "installing Octopus ${REF}"
+# An archive, not git+: pip would clone every submodule, recursively, twice under pipx.
+SPEC="octopus[logos] @ ${REPO}/archive/${REF}.tar.gz"
 
 PYTHON=""
 for candidate in python3.14 python3.13 python3.12 python3.11 python3.10 python3; do

@@ -199,6 +199,17 @@ def test_installs_use_archives_not_git_urls():
         assert "git+https" not in (root / name).read_text(), name
 
 
+def test_installs_default_to_the_latest_release_not_main():
+    """Like `octopus update`: a fresh install gets a release; OCTOPUS_REF still picks any ref."""
+    root = Path(__file__).parent.parent
+    sh = (root / "scripts" / "install.sh").read_text()
+    assert "${OCTOPUS_REF:-main}" not in sh
+    assert 'REF="$OCTOPUS_REF"' in sh and "/releases/latest" in sh
+    ps1 = (root / "scripts" / "install.ps1").read_text()
+    assert 'else { "main" }' not in ps1
+    assert "$env:OCTOPUS_REF" in ps1 and "/releases/latest" in ps1
+
+
 def test_install_script_names_all_three_ways_and_the_path_hint():
     script = (Path(__file__).parent.parent / "scripts" / "install.sh").read_text()
     assert "octopus ci init <owner/repo>" in script

@@ -2,10 +2,22 @@
 #
 #   irm https://raw.githubusercontent.com/logos-messaging/octopus/main/scripts/install.ps1 | iex
 #
-# $env:OCTOPUS_REF picks the branch, tag or commit to install (default: main).
+# $env:OCTOPUS_REF picks the branch, tag or commit to install (default: the latest release).
 $ErrorActionPreference = "Stop"
 
-$ref = if ($env:OCTOPUS_REF) { $env:OCTOPUS_REF } else { "main" }
+if ($env:OCTOPUS_REF) {
+    $ref = $env:OCTOPUS_REF
+} else {
+    # The latest release, the one `octopus update` installs.
+    try {
+        $ref = (Invoke-RestMethod -Uri "https://api.github.com/repos/logos-messaging/octopus/releases/latest" `
+            -Headers @{ Accept = "application/vnd.github+json" }).tag_name
+    } catch {
+        $ref = $null
+    }
+    if ($ref -cnotmatch '^v[0-9]') { throw "could not find the latest release: set OCTOPUS_REF to a tag or a branch" }
+}
+Write-Host "installing Octopus $ref"
 # An archive, not git+: pip would clone every submodule, recursively.
 $spec = "octopus[logos] @ https://github.com/logos-messaging/octopus/archive/$ref.tar.gz"
 
