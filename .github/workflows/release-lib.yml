@@ -1,8 +1,8 @@
 name: Release liblogosdelivery
 
 # Builds liblogosdelivery from the logos-delivery commit pinned by the bindings and, when asked,
-# publishes it to the `lib-latest` release for `octopus lib install`. Nothing is published unless
-# you run this by hand with `publish` ticked.
+# publishes it to the `lib-latest` release for `octopus lib install`, with a signed build provenance
+# attestation. Nothing is published unless you run this by hand with `publish` ticked.
 on:
   workflow_dispatch:
     inputs:
@@ -20,13 +20,32 @@ on:
       publish:
         type: boolean
         default: false
+      attest:
+        description: "Sign build provenance for the libraries (the caller publishes them)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
+  # One commit for both builds and the attestation, whatever the ref does meanwhile.
+  resolve:
+    name: resolve
+    runs-on: ubuntu-latest
+    outputs:
+      commit: ${{ steps.commit.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - id: commit
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
   build:
     name: build (${{ matrix.os }})
+    needs: resolve
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
@@ -38,12 +57,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ needs.resolve.outputs.commit }}
           submodules: true
 
-      # The same build as CI and the E2E test (flags, cache), so what is published is what the
-      # needs_lib tests ran against.
+      # The same build as CI and the E2E test (flags), so what is published is what the needs_lib
+      # tests ran against. From source: a cached library could come from any run on this ref.
       - uses: ./.github/actions/liblogosdelivery
+        with:
+          cache: "false"
 
       # The build keeps its debug information: 279 MB on Linux, 68 MB without it. The exported
       # symbols stay.
@@ -69,9 +90,61 @@ jobs:
             ${{ matrix.asset }}.gz
           if-no-files-found: error
 
+  # Signed build provenance for the libraries that get published, so a file swapped into the
+  # release fails `gh attestation verify`. Its own job: the build job never gets id-token.
+  attest:
+    name: attest
+    needs: [resolve, build]
+    if: inputs.publish || inputs.attest
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      # The certificate names this run's ref and commit, not inputs.ref: sign only what they built.
+      # A tag push always builds its own commit; a run of release.yml by hand may not.
+      - name: The build is this run's commit
+        id: own
+        env:
+          BUILT: ${{ needs.resolve.outputs.commit }}
+        run: |
+          if [ "$BUILT" = "$GITHUB_SHA" ]; then
+            echo "sign=true" >> "$GITHUB_OUTPUT"
+          elif [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            echo "::error::built $BUILT, but this run is on $GITHUB_SHA"
+            exit 1
+          else
+            echo "::warning::built $BUILT, but this run is on $GITHUB_SHA: not attesting, the certificate would name the wrong ref"
+            echo "sign=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/download-artifact@v4
+        if: steps.own.outputs.sign == 'true'
+        with:
+          path: assets
+          merge-multiple: true
+
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2, holds id-token
+        id: attest
+        if: steps.own.outputs.sign == 'true'
+        with:
+          subject-path: assets/liblogosdelivery-*
+
+      # Published beside the libraries, so `gh attestation verify --bundle` works without a login.
+      - name: Keep the bundle
+        if: steps.own.outputs.sign == 'true'
+        run: cp "${{ steps.attest.outputs.bundle-path }}" liblogosdelivery.sigstore.json
+      - uses: actions/upload-artifact@v4
+        if: steps.own.outputs.sign == 'true'
+        with:
+          name: liblogosdelivery.sigstore.json
+          path: liblogosdelivery.sigstore.json
+          if-no-files-found: error
+
   publish:
     name: publish
-    needs: build
+    needs: [build, attest]
     if: inputs.publish
     runs-on: ubuntu-latest
     permissions:

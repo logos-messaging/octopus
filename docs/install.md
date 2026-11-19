@@ -20,6 +20,16 @@ The script also runs `octopus lib install`, which fetches the prebuilt native li
 
 Maintainers publish the library by running the "Release liblogosdelivery" workflow with `publish` ticked (Linux x86_64 and macOS arm64). It is built from the logos-delivery commit pinned by the bindings.
 
+The release workflows also publish a signed build provenance attestation for each library: which workflow of this repository built it, from which ref and commit, on which kind of runner. The SHA-256 check above cannot show that, because the checksums sit in the same release as the library. `octopus lib install` does not check the attestation yet (releases made before it existed have none). Check a downloaded file with the GitHub CLI, pinning the ref it must come from: `main` for `lib-latest`, the tag for a versioned release.
+
+```bash
+gh attestation verify liblogosdelivery-linux-x86_64.so.gz --repo logos-messaging/octopus \
+  --signer-workflow logos-messaging/octopus/.github/workflows/release-lib.yml \
+  --source-ref refs/heads/main --deny-self-hosted-runners   # or: --source-ref refs/tags/v0.5.0
+```
+
+Use GitHub CLI 2.102 or later: older versions match `--signer-workflow` by prefix only and `--source-ref` without case. Without a GitHub login, add `--bundle liblogosdelivery.sigstore.json`, downloaded from the same release.
+
 ## Update
 
 ```bash
