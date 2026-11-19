@@ -14,7 +14,7 @@ Windows (PowerShell):
 irm https://raw.githubusercontent.com/logos-messaging/octopus/main/scripts/install.ps1 | iex
 ```
 
-The script uses `pipx`, then `uv tool`, then a private virtualenv, and needs Python 3.10 or newer. It installs `main`; set `OCTOPUS_REF` to a tag or commit to pin. **Run it again to upgrade**, then restart the service (`octopus runner install-service` rewrites it and reloads it, and is safe to repeat).
+The script uses `pipx`, then `uv tool`, then a private virtualenv, and needs Python 3.10 or newer. It installs the latest release; set `OCTOPUS_REF` to a tag, a branch (`main`) or a commit to pick another. **Run it again to upgrade**, then restart the service (`octopus runner install-service` rewrites it and reloads it, and is safe to repeat).
 
 The script also runs `octopus lib install`, which fetches the prebuilt native library (`liblogosdelivery`) for your OS and CPU from the `lib-latest` release of this repository, verifies its SHA-256, and puts it where the Python bindings load it. The library is published stripped and gzipped (about 23 MB on Linux); a release that only has the plain file (older ones, about 280 MB) is still read. Check with `octopus lib status`. If there is no release for your platform, build the library as in the README ("Develop") and run `octopus lib install --file <path>`. The logos-delivery Python bindings only load a Linux/macOS library today, so there is no Windows library and the Windows runner is not usable end to end until that is solved upstream.
 
