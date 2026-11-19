@@ -1,9 +1,11 @@
 name: Release
 
 # Publishes a GitHub release for a version tag: the Python wheel and sdist, and the prebuilt
-# liblogosdelivery for Linux x86_64 and macOS arm64, with SHA256SUMS. The tag must already exist and
-# match the version in pyproject.toml. Push a `v*` tag, or run this by hand for an existing tag
-# (the workflow file is taken from the branch you run it on, so use main for tags that predate it).
+# liblogosdelivery for Linux x86_64 and macOS arm64 (attested), with SHA256SUMS. The tag must
+# already exist and match the version in pyproject.toml. Push a `v*` tag, or run this by hand for
+# an existing tag (the workflow file is taken from the branch you run it on, so use main for tags
+# that predate it). A run by hand runs on the branch: it attests only when the tag is that branch's
+# head commit (the certificate then names the branch), and otherwise publishes no attestation.
 on:
   push:
     tags: ["v*"]
@@ -23,13 +25,17 @@ env:
 jobs:
   libs:
     name: libs
-    # release-lib's publish job asks for contents: write even when it is skipped.
+    # release-lib's publish job asks for contents: write even when it is skipped. Its attest job
+    # needs id-token and attestations, which a called workflow only gets from its caller.
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     uses: ./.github/workflows/release-lib.yml
     with:
       ref: ${{ inputs.tag || github.ref_name }}
       publish: false
+      attest: true
 
   dist:
     name: wheel and sdist
@@ -81,6 +87,12 @@ jobs:
         run: |
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" assets/* --clobber
+            # Libraries replaced without a new attestation: an older bundle would describe others.
+            if [ ! -e assets/liblogosdelivery.sigstore.json ] &&
+              gh release view "$TAG" --json assets --jq '.assets[].name' |
+              grep -qx liblogosdelivery.sigstore.json; then
+              gh release delete-asset "$TAG" liblogosdelivery.sigstore.json --yes
+            fi
           else
             gh release create "$TAG" assets/* --verify-tag --title "Octopus $TAG" --generate-notes
           fi
